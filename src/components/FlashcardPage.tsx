@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import type { StudyItem } from '../types';
-import { RotateCw, Volume2, Check, X, Minus, PenTool, RefreshCw } from 'lucide-react';
+import type { KotobaItem } from '../types/database';
+import { supabase } from '../lib/supabase';
+import { RotateCw, Volume2, PenTool, RefreshCw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Props {
   items: StudyItem[];
@@ -8,14 +10,17 @@ interface Props {
   isDark: boolean;
 }
 
-export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark }) => {
+export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
   const [selectedType, setSelectedType] = useState<string>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
+  const [search, setSearch] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [strokeSvg, setStrokeSvg] = useState<string | null>(null);
   const [loadingStroke, setLoadingStroke] = useState(false);
+  const [relatedKotoba, setRelatedKotoba] = useState<KotobaItem[]>([]);
+  const [loadingRelatedKotoba, setLoadingRelatedKotoba] = useState(false);
 
   const styles = {
     filterBar: isDark ? 'bg-[#161b22]/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
@@ -29,15 +34,6 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
     textSub: isDark ? 'text-slate-300' : 'text-slate-700',
     textMuted: isDark ? 'text-slate-400' : 'text-slate-500',
     badgeType: isDark ? 'bg-slate-800/80 text-slate-300' : 'bg-slate-100 text-slate-700',
-    btnHard: isDark 
-      ? 'bg-rose-950/30 hover:bg-rose-900/40 text-rose-400 border-rose-900/50' 
-      : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200 shadow-sm',
-    btnGood: isDark 
-      ? 'bg-amber-950/30 hover:bg-amber-900/40 text-amber-400 border-amber-900/50' 
-      : 'bg-amber-50 hover:bg-amber-100 text-amber-600 border-amber-200 shadow-sm',
-    btnEasy: isDark 
-      ? 'bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-900/50' 
-      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border-emerald-200 shadow-sm',
   };
 
   const filteredItems = items.filter((item) => {
@@ -49,11 +45,44 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
         : selectedStatus === 'MASTERED'
         ? item.isMastered
         : !item.isMastered;
-    return matchType && matchLevel && matchStatus;
+    const query = search.trim().toLocaleLowerCase();
+    const matchSearch = !query || [item.japanese, item.reading, item.onyomi, item.kunyomi, item.meaning]
+      .some((value) => value?.toLocaleLowerCase().includes(query));
+    return matchType && matchLevel && matchStatus && matchSearch;
   });
 
   const currentItem = filteredItems[currentIndex];
   const isKanji = currentItem?.type === 'kanji';
+  const featuredKotoba = relatedKotoba[0];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchRelatedKotoba = async () => {
+      if (!currentItem || currentItem.type !== 'kanji') {
+        setRelatedKotoba([]);
+        setLoadingRelatedKotoba(false);
+        return;
+      }
+
+      setRelatedKotoba([]);
+      setLoadingRelatedKotoba(true);
+      const { data, error } = await supabase
+        .from('kotoba')
+        .select('*')
+        .like('word', `%${currentItem.japanese}%`)
+        .limit(5);
+
+      if (!isMounted) return;
+      setRelatedKotoba(error ? [] : data ?? []);
+      setLoadingRelatedKotoba(false);
+    };
+
+    void fetchRelatedKotoba();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentItem?.id, currentItem?.japanese, currentItem?.type]);
 
   useEffect(() => {
     if (!currentItem || currentItem.type !== 'kanji') {
@@ -104,23 +133,11 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
     setStrokeSvg(null);
   }, [currentIndex, selectedType, selectedLevel, selectedStatus]);
 
-  const handleNextCard = () => {
+  const handleNavigate = (direction: -1 | 1) => {
     setIsFlipped(false);
     if (filteredItems.length > 0) {
-      setCurrentIndex((prev) => (prev + 1) % filteredItems.length);
+      setCurrentIndex((prev) => (prev + direction + filteredItems.length) % filteredItems.length);
     }
-  };
-
-  const handleRating = (rating: 'hard' | 'good' | 'easy') => {
-    if (!currentItem) return;
-
-    if (rating === 'easy') {
-      onToggleMastery(currentItem.id, true);
-    } else if (rating === 'hard') {
-      onToggleMastery(currentItem.id, false);
-    }
-
-    handleNextCard();
   };
 
   const handleSpeak = (text: string) => {
@@ -134,7 +151,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
   };
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-1 sm:px-4">
       {/* Top Filter Bar */}
       <div className={`border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${styles.filterBar}`}>
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -171,6 +188,18 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
             <option value="LEARNING">Belum Hafal</option>
             <option value="MASTERED">Sudah Hafal</option>
           </select>
+
+          <label className={`flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 ${styles.dropdown}`}>
+            <Search size={15} className={styles.textMuted} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => { setSearch(event.target.value); setCurrentIndex(0); }}
+              placeholder="Search flashcards..."
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-slate-500"
+              aria-label="Search flashcards"
+            />
+          </label>
         </div>
 
         <div className={`text-xs font-bold pr-2 ${styles.textMuted}`}>
@@ -181,8 +210,18 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
       {/* Main Flashcards Grid Container */}
       {currentItem ? (
         <div className="flex flex-col items-center gap-6 w-full">
-          
-          <div className={`w-full grid gap-6 transition-all duration-300 ${isKanji ? 'grid-cols-1 md:grid-cols-12' : 'grid-cols-1 max-w-2xl'}`}>
+          <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:gap-4">
+            <button
+              type="button"
+              onClick={() => handleNavigate(-1)}
+              aria-label="Previous flashcard"
+              title="Previous"
+              className={`flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 ${styles.dropdown}`}
+            >
+              <ChevronLeft size={20} />
+            </button>
+
+            <div className={`mx-auto grid w-full min-w-0 gap-6 transition-all duration-300 ${isKanji ? 'max-w-7xl grid-cols-1 md:grid-cols-12' : 'max-w-3xl grid-cols-1'}`}>
             
             {/* Primary 3D Flashcard Box */}
             <div className={`w-full h-96 md:h-[400px] perspective-1000 select-none ${isKanji ? 'md:col-span-7' : ''}`}>
@@ -218,9 +257,12 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
                     <h2 className={`text-7xl md:text-8xl font-black mb-2 tracking-tight ${styles.textMain}`}>
                       {currentItem.japanese}
                     </h2>
-                    <p className={`text-lg font-bold ${styles.textSub}`}>
-                      {currentItem.reading}
-                    </p>
+                    {isKanji ? (
+                      <div className={`mx-auto flex flex-col items-center gap-1 text-sm ${styles.textSub}`}>
+                        <p><span className={`mr-2 text-xs font-bold ${styles.textMuted}`}>Kun:</span>{currentItem.kunyomi || '—'}</p>
+                        <p><span className={`mr-2 text-xs font-bold ${styles.textMuted}`}>On:</span>{currentItem.onyomi || '—'}</p>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="text-center">
@@ -245,7 +287,8 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
                     </span>
                   </div>
 
-                  <div className="text-center my-auto space-y-3">
+                  <div className="my-auto max-h-[250px] w-full space-y-3 overflow-y-auto text-center">
+                    <p className={`text-xs font-semibold uppercase tracking-wide ${styles.textMuted}`}>Readings</p>
                     <p className="text-xl font-bold text-rose-500">{currentItem.reading}</p>
                     <h3 className={`text-4xl font-extrabold ${styles.textMain}`}>{currentItem.meaning}</h3>
 
@@ -255,12 +298,21 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
                       </p>
                     )}
 
+                    {isKanji && featuredKotoba && (
+                      <div className={`rounded-2xl border p-3.5 text-sm ${isDark ? 'bg-[#0d1117] border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                        <p className={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                          {featuredKotoba.word} ({featuredKotoba.reading || '—'} - {featuredKotoba.meaning})
+                        </p>
+                      </div>
+                    )}
+
                     {currentItem.exampleJp && (
                       <div className={`text-xs p-3.5 rounded-2xl border mt-2 ${isDark ? 'bg-[#0d1117] border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
                         <p className={`italic ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>"{currentItem.exampleJp}"</p>
-                        <p className={`not-italic mt-0.5 ${styles.textMuted}`}>{currentItem.exampleId}</p>
+                        {currentItem.exampleMeaning && <p className={`not-italic mt-0.5 ${styles.textMuted}`}>{currentItem.exampleMeaning}</p>}
                       </div>
                     )}
+
                   </div>
 
                   <div className="text-center">
@@ -318,30 +370,43 @@ export const FlashcardsPage: React.FC<Props> = ({ items, onToggleMastery, isDark
             )}
 
           </div>
+          <button
+            type="button"
+            onClick={() => handleNavigate(1)}
+            aria-label="Next flashcard"
+            title="Next"
+            className={`flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 ${styles.dropdown}`}
+          >
+            <ChevronRight size={20} />
+          </button>
+        </div>
 
-          {/* SRS Rating Action Buttons */}
-          <div className="grid grid-cols-3 gap-4 w-full max-w-2xl">
-            <button
-              onClick={() => handleRating('hard')}
-              className={`flex items-center justify-center gap-2 py-4 px-4 border rounded-2xl font-extrabold text-xs md:text-sm transition active:scale-95 ${styles.btnHard}`}
-            >
-              <X size={17} /> Hard (Repeat)
-            </button>
-
-            <button
-              onClick={() => handleRating('good')}
-              className={`flex items-center justify-center gap-2 py-4 px-4 border rounded-2xl font-extrabold text-xs md:text-sm transition active:scale-95 ${styles.btnGood}`}
-            >
-              <Minus size={17} /> Good
-            </button>
-
-            <button
-              onClick={() => handleRating('easy')}
-              className={`flex items-center justify-center gap-2 py-4 px-4 border rounded-2xl font-extrabold text-xs md:text-sm transition active:scale-95 ${styles.btnEasy}`}
-            >
-              <Check size={17} /> Easy (Mastered)
-            </button>
-          </div>
+        {isKanji && (
+          <section className={`w-full max-w-7xl rounded-2xl border p-4 sm:p-5 ${styles.sidePanelBg}`}>
+            <div className="border-b border-slate-800 px-5 py-4">
+              <h3 className={`text-sm font-bold ${styles.textMain}`}>Related Vocabulary</h3>
+            </div>
+            <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              {loadingRelatedKotoba ? (
+                <p className={`col-span-full py-5 text-center text-sm ${styles.textMuted}`}>Loading related vocabulary...</p>
+              ) : relatedKotoba.length ? relatedKotoba.slice(0, 5).map((word) => (
+                <button
+                  key={word.id}
+                  type="button"
+                  onClick={() => handleSpeak(`${word.word}、${word.reading ?? ''}`)}
+                  className={`min-h-32 rounded-xl border p-4 text-left transition hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 ${isDark ? 'border-slate-800 bg-[#0d1117] hover:border-rose-500/50' : 'border-slate-200 bg-slate-50 hover:border-rose-300'}`}
+                  aria-label={`Listen to ${word.word}, ${word.reading ?? ''}`}
+                >
+                  <span className={`block text-lg font-bold ${styles.textMain}`}>{word.word}</span>
+                  <span className="mt-1 block text-sm font-medium text-rose-500">{word.reading || '—'}</span>
+                  <span className={`mt-2 block text-sm leading-relaxed ${styles.textMuted}`}>{word.meaning}</span>
+                </button>
+              )) : (
+                <p className={`col-span-full py-5 text-center text-sm ${styles.textMuted}`}>No related vocabulary found.</p>
+              )}
+            </div>
+          </section>
+        )}
 
         </div>
       ) : (

@@ -1,58 +1,216 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import type { StudyItem } from './types';
 import './App.css';
 import { FlashcardsPage } from './components/FlashcardPage';
 import { QuizPage } from './components/QuizPage';
 import { DataBankPage } from './components/DataBankPage';
-import { ImportExportPage } from './components/ImportExportPage';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { LoginPage } from './pages/LoginPage';
+import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { KanjiPage } from './pages/admin/KanjiPage';
+import { KotobaPage } from './pages/admin/KotobaPage';
+import { BunpouPage } from './pages/admin/BunpouPage';
+import { QuestionPage } from './pages/admin/QuestionPage';
+import { StudyDataPage } from './pages/StudyDataPage';
+import { supabase } from './lib/supabase';
 import {
-  LayoutDashboard,
   Layers,
   BrainCircuit,
-  Database,
-  FileUp,
-  Flame,
   Play,
   Trophy,
   Lightbulb,
   RotateCcw,
   Menu,
   X,
+  Sun,
+  Moon,
+  ChevronDown,
+  LogOut,
 } from 'lucide-react';
 
 type ThemeMode = 'black' | 'light';
 
-const INITIAL_DATA: StudyItem[] = [
-  { id: '1', type: 'kanji', japanese: '日', reading: 'ひ / ニチ', meaning: 'Matahari / Hari', jlptLevel: 'N5', exampleJp: '日曜日', exampleId: 'Hari Minggu', isMastered: true, createdAt: new Date().toISOString() },
-  { id: '2', type: 'kanji', japanese: '本', reading: 'ほん', meaning: 'Buku / Asal', jlptLevel: 'N5', exampleJp: '日本語', exampleId: 'Bahasa Jepang', isMastered: false, createdAt: new Date().toISOString() },
-  { id: '3', type: 'kanji', japanese: '学', reading: 'まな・ぶ / ガク', meaning: 'Belajar', jlptLevel: 'N5', exampleJp: '学生', exampleId: 'Siswa', isMastered: false, createdAt: new Date().toISOString() },
-  { id: '10', type: 'kotoba', japanese: '食べる', reading: 'たべる', meaning: 'Makan', jlptLevel: 'N5', exampleJp: 'りんごを食べる。', exampleId: 'Makan apel.', isMastered: true, createdAt: new Date().toISOString() },
-  { id: '11', type: 'kotoba', japanese: '飲む', reading: 'のむ', meaning: 'Minum', jlptLevel: 'N5', exampleJp: '水を飲む。', exampleId: 'Minum air.', isMastered: false, createdAt: new Date().toISOString() },
-  { id: '12', type: 'kotoba', japanese: '本屋', reading: 'ほんや', meaning: 'Toko Buku', jlptLevel: 'N5', exampleJp: '本屋に行く。', exampleId: 'Pergi ke toko buku.', isMastered: false, createdAt: new Date().toISOString() },
-  { id: '20', type: 'bunpou', japanese: '〜てはいけない', reading: 'Te wa ikenai', meaning: 'Tidak boleh...', jlptLevel: 'N5', structure: 'Kata Kerja Bentuk-Te + はいけない', exampleJp: 'ここで写真を撮ってはいけない。', exampleId: 'Tidak boleh mengambil foto di sini.', isMastered: true, createdAt: new Date().toISOString() },
-  { id: '21', type: 'bunpou', japanese: '〜なければならない', reading: 'Nakereba narana-i', meaning: 'Harus...', jlptLevel: 'N5', structure: 'Kata Kerja Bentuk-Nai + ければならない', exampleJp: '宿題をしなければならない。', exampleId: 'Harus mengerjakan PR.', isMastered: false, createdAt: new Date().toISOString() },
-];
+const fetchStudyData = async (): Promise<StudyItem[]> => {
+  const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
+    supabase.from('kanji').select('*'),
+    supabase.from('kotoba').select('*'),
+    supabase.from('bunpou').select('*'),
+  ]);
 
-export default function App() {
-  const [items, setItems] = useState<StudyItem[]>(() => {
-    const saved = localStorage.getItem('nihongo_master_items');
-    return saved ? JSON.parse(saved) : INITIAL_DATA;
-  });
+  const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
+  const kotobaRows = (kotobaRes.data ?? []) as Record<string, any>[];
+  const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'flashcards' | 'quiz' | 'databank' | 'import'>('dashboard');
+  const allRows = [
+    ...kanjiRows.map((item) => ({
+      id: String(item.id),
+      type: 'kanji' as const,
+      japanese: String(item.kanji ?? ''),
+      reading: [item.onyomi, item.kunyomi].filter(Boolean).join(' / ') || '—',
+      onyomi: String(item.onyomi ?? ''),
+      kunyomi: String(item.kunyomi ?? ''),
+      meaning: String(item.meaning ?? ''),
+      jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+      isMastered: false,
+      createdAt: item.created_at ?? new Date().toISOString(),
+    })),
+    ...kotobaRows.map((item) => ({
+      id: String(item.id),
+      type: 'kotoba' as const,
+      japanese: String(item.word ?? ''),
+      reading: String(item.reading ?? '—'),
+      meaning: String(item.meaning ?? ''),
+      jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+      exampleJp: item.example_sentence ?? undefined,
+      exampleMeaning: item.example_meaning ?? undefined,
+      relatedWords: Array.isArray(item.related_words) ? item.related_words.filter(Boolean) : [],
+      isMastered: false,
+      createdAt: item.created_at ?? new Date().toISOString(),
+    })),
+    ...bunpouRows.map((item) => ({
+      id: String(item.id),
+      type: 'bunpou' as const,
+      japanese: String(item.title ?? ''),
+      reading: String(item.structure ?? '—'),
+      meaning: String(item.meaning ?? ''),
+      jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+      structure: String(item.structure ?? ''),
+      exampleJp: String(item.example_sentence ?? ''),
+      isMastered: false,
+      createdAt: item.created_at ?? new Date().toISOString(),
+    })),
+  ];
+
+  return allRows;
+};
+
+function AppShell() {
+  const [items, setItems] = useState<StudyItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'flashcards' | 'quiz' | 'databank'>('dashboard');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const savedTheme = localStorage.getItem('nihongo_master_theme');
     return savedTheme === 'light' ? 'light' : 'black';
   });
+  const [currentUserEmail, setCurrentUserEmail] = useState('');
+  const [currentUserDisplayName, setCurrentUserDisplayName] = useState('');
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  const navigate = useNavigate();
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const displayName = currentUserDisplayName || currentUserEmail.split('@')[0] || 'Student';
 
   useEffect(() => {
-    localStorage.setItem('nihongo_master_items', JSON.stringify(items));
-  }, [items]);
+    let mounted = true;
+
+    const loadData = async () => {
+      setIsLoading(true);
+      const data = await fetchStudyData();
+      if (!mounted) return;
+      setItems(data);
+      setIsLoading(false);
+    };
+
+    void loadData();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('nihongo_master_theme', themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    const closeProfileMenu = (event: MouseEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeProfileMenu);
+    return () => document.removeEventListener('mousedown', closeProfileMenu);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncUserProfile = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!isMounted) return;
+
+      if (!session?.user) {
+        setCurrentUserEmail('');
+        setCurrentUserDisplayName('');
+        setIsAdminUser(false);
+        return;
+      }
+
+      setCurrentUserEmail(session.user.email ?? '');
+
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('role, full_name')
+        .eq('id', session.user.id)
+        .maybeSingle<{ role: 'admin' | 'user'; full_name?: string | null }>();
+
+      if (!isMounted) return;
+
+      if (error) {
+        setIsAdminUser(false);
+        setCurrentUserDisplayName('');
+        return;
+      }
+
+      setIsAdminUser(profile?.role === 'admin');
+      setCurrentUserDisplayName(profile?.full_name?.trim() ?? '');
+    };
+
+    void syncUserProfile();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!isMounted) return;
+
+      if (!session?.user) {
+        setCurrentUserEmail('');
+        setCurrentUserDisplayName('');
+        setIsAdminUser(false);
+        return;
+      }
+
+      setCurrentUserEmail(session.user.email ?? '');
+
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('role, full_name')
+        .eq('id', session.user.id)
+        .maybeSingle<{ role: 'admin' | 'user'; full_name?: string | null }>();
+
+      if (!isMounted) return;
+
+      if (error) {
+        setIsAdminUser(false);
+        setCurrentUserDisplayName('');
+        return;
+      }
+
+      setIsAdminUser(profile?.role === 'admin');
+      setCurrentUserDisplayName(profile?.full_name?.trim() ?? '');
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const kanjiItems = items.filter((i) => i.type === 'kanji');
   const kotobaItems = items.filter((i) => i.type === 'kotoba');
@@ -65,10 +223,9 @@ export default function App() {
   const totalMastered = items.filter((i) => i.isMastered).length;
   const totalAccuracy = items.length > 0 ? Math.round((totalMastered / items.length) * 100) : 0;
 
-  const handleResetSampleData = () => {
-    if (confirm('Reset data ke sample awal? Data buatanmu akan tertimpa.')) {
-      setItems(INITIAL_DATA);
-    }
+  const handleResetSampleData = async () => {
+    const refreshed = await fetchStudyData();
+    setItems(refreshed);
   };
 
   const handleToggleMastery = (id: string, isMastered: boolean) => {
@@ -79,13 +236,13 @@ export default function App() {
     );
   };
 
-  const handleImportData = (incomingItems: StudyItem[]) => {
-    if (!incomingItems.length) {
-      alert('Tidak ada data yang valid untuk diimpor.');
-      return;
-    }
-
-    setItems(incomingItems);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setCurrentUserEmail('');
+    setCurrentUserDisplayName('');
+    setIsAdminUser(false);
+    setIsProfileMenuOpen(false);
+    navigate('/login', { replace: true });
   };
 
   return (
@@ -114,24 +271,22 @@ export default function App() {
         <div className={`nav-panel ${isMenuOpen ? 'is-open' : ''}`}>
           <div className="tab-list">
             {[
-              { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-              { id: 'flashcards', label: 'Flashcards', icon: Layers },
-              { id: 'quiz', label: 'Quiz', icon: BrainCircuit },
-              { id: 'databank', label: 'Data Bank', icon: Database },
-              { id: 'import', label: 'Import / Export', icon: FileUp },
+              { id: 'dashboard', label: 'Dashboard' },
+              { id: 'flashcards', label: 'Flashcards' },
+              { id: 'quiz', label: 'Quiz' },
+              { id: 'databank', label: 'Data Bank' },
             ].map((tab) => {
-              const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
+                  type="button"
                   onClick={() => {
                     setActiveTab(tab.id as any);
                     setIsMenuOpen(false);
                   }}
                   className={`tab-button ${isActive ? 'active' : ''}`}
                 >
-                  <Icon size={14} />
                   {tab.label}
                 </button>
               );
@@ -139,38 +294,73 @@ export default function App() {
           </div>
 
           <div className="toolbar-actions">
-            <div className="theme-switcher" aria-label="Choose theme mode">
+            <div className="theme-switcher" role="group" aria-label="Choose theme">
               <button
                 type="button"
                 className={themeMode === 'black' ? 'is-active' : ''}
                 onClick={() => setThemeMode('black')}
+                aria-label="Use dark theme"
+                aria-pressed={themeMode === 'black'}
+                title="Dark theme"
               >
-                Black Theme
+                <Moon size={17} />
               </button>
               <button
                 type="button"
                 className={themeMode === 'light' ? 'is-active' : ''}
                 onClick={() => setThemeMode('light')}
+                aria-label="Use light theme"
+                aria-pressed={themeMode === 'light'}
+                title="Light theme"
               >
-                Light Theme
+                <Sun size={17} />
               </button>
             </div>
 
-            <div className="streak-pill">
-              <Flame size={15} className="fill-current" />
-              3 Day Streak
-            </div>
+            {currentUserEmail && (
+              <div className="profile-menu" ref={profileMenuRef}>
+                <button
+                  type="button"
+                  className="profile-trigger"
+                  aria-expanded={isProfileMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setIsProfileMenuOpen((open) => !open)}
+                  title={currentUserEmail}
+                >
+                  <span className="profile-avatar" aria-hidden="true">{displayName.charAt(0).toLocaleUpperCase()}</span>
+                  <span className="profile-name">{displayName}</span>
+                  <ChevronDown size={15} />
+                </button>
+                {isProfileMenuOpen && (
+                  <div className="profile-dropdown" role="menu">
+                    <span className="profile-email">{currentUserEmail}</span>
+                    {isAdminUser && (
+                      <button type="button" role="menuitem" onClick={() => { setIsProfileMenuOpen(false); navigate('/admin/dashboard'); }}>
+                        Admin Dashboard
+                      </button>
+                    )}
+                    <button type="button" role="menuitem" onClick={() => void handleLogout()}>
+                      <LogOut size={15} /> Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </nav>
 
       <main className="main-content">
-        {activeTab === 'dashboard' && (
+        {isLoading ? (
+          <div className="panel loading-panel">
+            <p>Loading study data from Supabase...</p>
+          </div>
+        ) : activeTab === 'dashboard' && (
           <>
             <div className="hero-panel">
               <div className="hero-content">
-                <span className="hero-badge">OKAERI! お帰りなさい</span>
-                <h2>Ready to master Japanese today?</h2>
+                <span className="hero-badge">お帰りなさい</span>
+                <h2>Okaeri, {displayName}!</h2>
                 <p>
                   Track your progress, review flashcards, and test your skills in Kanji, Kotoba, and Bunpou.
                 </p>
@@ -266,9 +456,9 @@ export default function App() {
 
                 <div className="sample-box">
                   <p className="sample-label">NEED SAMPLE DATA?</p>
-                  <p className="sample-text">Pre-loaded N5 &amp; N4 Kanji, Vocabulary, and Grammar items are ready for you!</p>
-                  <button onClick={handleResetSampleData} className="reset-button">
-                    <RotateCcw size={13} /> Reload Built-in Sample Items
+                  <p className="sample-text">Live data is loaded directly from Supabase for your study library.</p>
+                  <button onClick={() => void handleResetSampleData()} className="reset-button">
+                    <RotateCcw size={13} /> Refresh Data
                   </button>
                 </div>
               </div>
@@ -292,23 +482,172 @@ export default function App() {
           <DataBankPage items={items} isDark={themeMode === 'black'} />
         )}
 
-        {activeTab === 'import' && (
-          <ImportExportPage
-            items={items}
-            onImportData={handleImportData}
-            isDark={themeMode === 'black'}
-          />
-        )}
-
-        {activeTab !== 'dashboard' && activeTab !== 'flashcards' && activeTab !== 'quiz' && activeTab !== 'databank' && activeTab !== 'import' && (
-          <div className="placeholder-card">
-            <p className="placeholder-title">Halaman {activeTab} siap dikembangkan!</p>
-            <p className="placeholder-text">
-              Pilih tab <b>Dashboard</b> untuk melihat tampilan utama.
-            </p>
-          </div>
-        )}
       </main>
     </div>
   );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <AppShell />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/kanji"
+          element={
+            <ProtectedRoute>
+              <StudyDataPage kind="kanji" title="Kanji" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/kotoba"
+          element={
+            <ProtectedRoute>
+              <StudyDataPage kind="kotoba" title="Kotoba" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/bunpou"
+          element={
+            <ProtectedRoute>
+              <StudyDataPage kind="bunpou" title="Bunpou" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/quiz"
+          element={
+            <ProtectedRoute>
+              <QuizRoutePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <ProtectedRoute requireAdmin>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/kanji"
+          element={
+            <ProtectedRoute requireAdmin>
+              <KanjiPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/kotoba"
+          element={
+            <ProtectedRoute requireAdmin>
+              <KotobaPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/bunpou"
+          element={
+            <ProtectedRoute requireAdmin>
+              <BunpouPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/questions"
+          element={
+            <ProtectedRoute requireAdmin>
+              <QuestionPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function QuizRoutePage() {
+  const [items, setItems] = useState<StudyItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const load = async () => {
+      const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
+        supabase.from('kanji').select('*'),
+        supabase.from('kotoba').select('*'),
+        supabase.from('bunpou').select('*'),
+      ]);
+
+      if (!mounted) return;
+
+      const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
+      const kotobaRows = (kotobaRes.data ?? []) as Record<string, any>[];
+      const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
+
+      const nextItems: StudyItem[] = [
+        ...kanjiRows.map((item) => ({
+          id: String(item.id),
+          type: 'kanji' as const,
+          japanese: String(item.kanji ?? ''),
+          reading: [item.onyomi, item.kunyomi].filter(Boolean).join(' / ') || '—',
+          onyomi: String(item.onyomi ?? ''),
+          kunyomi: String(item.kunyomi ?? ''),
+          meaning: String(item.meaning ?? ''),
+          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+          isMastered: false,
+          createdAt: item.created_at ?? new Date().toISOString(),
+        })),
+        ...kotobaRows.map((item) => ({
+          id: String(item.id),
+          type: 'kotoba' as const,
+          japanese: String(item.word ?? ''),
+          reading: String(item.reading ?? '—'),
+          meaning: String(item.meaning ?? ''),
+          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+          isMastered: false,
+          createdAt: item.created_at ?? new Date().toISOString(),
+        })),
+        ...bunpouRows.map((item) => ({
+          id: String(item.id),
+          type: 'bunpou' as const,
+          japanese: String(item.title ?? ''),
+          reading: String(item.structure ?? '—'),
+          meaning: String(item.meaning ?? ''),
+          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+          structure: String(item.structure ?? ''),
+          exampleJp: String(item.example_sentence ?? ''),
+          isMastered: false,
+          createdAt: item.created_at ?? new Date().toISOString(),
+        })),
+      ];
+
+      setItems(nextItems);
+      setLoading(false);
+    };
+
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (loading) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">Loading quiz data...</div>;
+  }
+
+  return <QuizPage items={items} isDark />;
 }

@@ -6,11 +6,15 @@ export interface StudyItem {
   type: ItemType;
   japanese: string;
   reading: string;
+  onyomi?: string;
+  kunyomi?: string;
   meaning: string;
   jlptLevel: JLPTLevel;
   structure?: string;
   exampleJp?: string;
+  exampleMeaning?: string;
   exampleId?: string;
+  relatedWords?: string[];
   isMastered: boolean;
   createdAt?: string;
 }

@@ -10,6 +10,8 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
   const [selectedType, setSelectedType] = useState<'ALL' | StudyItem['type']>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<'ALL' | StudyItem['jlptLevel']>('ALL');
   const [selectedItem, setSelectedItem] = useState<StudyItem | null>(null);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const grouped = {
     kanji: items.filter((item) => item.type === 'kanji'),
@@ -24,6 +26,11 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
       return matchesType && matchesLevel;
     });
   }, [items, selectedType, selectedLevel]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / rowsPerPage));
+  const safePage = Math.min(currentPage, totalPages);
+  const firstIndex = (safePage - 1) * rowsPerPage;
+  const paginatedItems = filteredItems.slice(firstIndex, firstIndex + rowsPerPage);
 
   const totalMastered = items.filter((item) => item.isMastered).length;
   const totalLevel = items.length;
@@ -93,7 +100,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
           <select
             className="filter-select"
             value={selectedType}
-            onChange={(event) => setSelectedType(event.target.value as 'ALL' | StudyItem['type'])}
+            onChange={(event) => { setSelectedType(event.target.value as 'ALL' | StudyItem['type']); setCurrentPage(1); }}
           >
             <option value="ALL">All Types</option>
             <option value="kanji">Kanji</option>
@@ -104,7 +111,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
           <select
             className="filter-select"
             value={selectedLevel}
-            onChange={(event) => setSelectedLevel(event.target.value as 'ALL' | StudyItem['jlptLevel'])}
+            onChange={(event) => { setSelectedLevel(event.target.value as 'ALL' | StudyItem['jlptLevel']); setCurrentPage(1); }}
           >
             <option value="ALL">All JLPT</option>
             <option value="N5">N5</option>
@@ -113,10 +120,17 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
             <option value="N2">N2</option>
             <option value="N1">N1</option>
           </select>
+
+          <label className="ml-auto flex items-center gap-2 text-sm text-slate-500">
+            Rows per page
+            <select className="filter-select" value={rowsPerPage} onChange={(event) => { setRowsPerPage(Number(event.target.value)); setCurrentPage(1); }}>
+              {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
         </div>
 
         <div className="library-grid">
-          {filteredItems.map((item) => (
+          {paginatedItems.map((item) => (
             <article key={item.id} className="library-item" onClick={() => setSelectedItem(item)}>
               <div className="library-top">
                 <span className={`type-badge ${item.type}`}>{item.type}</span>
@@ -138,6 +152,19 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
               )}
             </article>
           ))}
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+          <p>Showing {filteredItems.length ? firstIndex + 1 : 0} to {Math.min(firstIndex + rowsPerPage, filteredItems.length)} of {filteredItems.length} items</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="filter-select min-w-0" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1}>Previous</button>
+            {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+              <button key={page} type="button" className={`min-h-10 min-w-10 rounded-lg border px-3 font-bold ${safePage === page ? 'border-rose-500 bg-rose-500/10 text-rose-500' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`} onClick={() => setCurrentPage(page)} aria-current={safePage === page ? 'page' : undefined}>
+                {page}
+              </button>
+            ))}
+            <button type="button" className="filter-select min-w-0" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safePage === totalPages}>Next</button>
+          </div>
         </div>
       </div>
 
@@ -172,7 +199,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
                 <div className="detail-box">
                   <label>Example</label>
                   <p>{selectedItem.exampleJp}</p>
-                  {selectedItem.exampleId && <small>{selectedItem.exampleId}</small>}
+                  {selectedItem.exampleMeaning && <small>{selectedItem.exampleMeaning}</small>}
                 </div>
               )}
 
