@@ -3,17 +3,18 @@ import type { StudyItem } from '../types';
 import type { KotobaItem } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { RotateCw, Volume2, PenTool, RefreshCw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FuriganaText } from './FuriganaText';
+import { speakJapanese } from '../lib/audio';
 
 interface Props {
   items: StudyItem[];
-  onToggleMastery: (id: string, isMastered: boolean) => void;
   isDark: boolean;
 }
 
 export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
-  const [selectedType, setSelectedType] = useState<string>('ALL');
+  const [selectedType, setSelectedType] = useState<'ALL' | 'kanji' | 'kotoba'>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
-  const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
+  const [selectedStatus, setSelectedStatus] = useState<'ALL' | 'new' | 'learning' | 'mastered'>('ALL');
   const [search, setSearch] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -36,15 +37,17 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
     badgeType: isDark ? 'bg-slate-800/80 text-slate-300' : 'bg-slate-100 text-slate-700',
   };
 
-  const filteredItems = items.filter((item) => {
+  const filteredItems = items.filter((item) => item.type === 'kanji' || item.type === 'kotoba').filter((item) => {
     const matchType = selectedType === 'ALL' || item.type === selectedType;
     const matchLevel = selectedLevel === 'ALL' || item.jlptLevel === selectedLevel;
     const matchStatus =
       selectedStatus === 'ALL'
         ? true
-        : selectedStatus === 'MASTERED'
+        : selectedStatus === 'mastered'
         ? item.isMastered
-        : !item.isMastered;
+        : selectedStatus === 'learning'
+        ? !item.isMastered && Boolean(item.masteryStreak)
+        : !item.isMastered && !item.masteryStreak;
     const query = search.trim().toLocaleLowerCase();
     const matchSearch = !query || [item.japanese, item.reading, item.onyomi, item.kunyomi, item.meaning]
       .some((value) => value?.toLocaleLowerCase().includes(query));
@@ -53,6 +56,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
 
   const currentItem = filteredItems[currentIndex];
   const isKanji = currentItem?.type === 'kanji';
+  const isKotoba = currentItem?.type === 'kotoba';
   const featuredKotoba = relatedKotoba[0];
 
   useEffect(() => {
@@ -119,14 +123,27 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'SELECT') {
+      const target = e.target as HTMLElement;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) return;
+      if (e.code === 'Space') {
         e.preventDefault();
         setIsFlipped((prev) => !prev);
+      } else if (e.code === 'ArrowRight' && filteredItems.length > 0) {
+        e.preventDefault();
+        setIsFlipped(false);
+        setCurrentIndex((index) => (index + 1) % filteredItems.length);
+      } else if (e.code === 'ArrowLeft' && filteredItems.length > 0) {
+        e.preventDefault();
+        setIsFlipped(false);
+        setCurrentIndex((index) => (index - 1 + filteredItems.length) % filteredItems.length);
+      } else if (e.code === 'KeyA' && currentItem?.type === 'kotoba') {
+        e.preventDefault();
+        speakJapanese(`${currentItem.japanese}。${currentItem.reading ?? ''}。${currentItem.exampleJp ?? ''}`);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [currentItem, filteredItems.length]);
 
   useEffect(() => {
     setIsFlipped(false);
@@ -140,31 +157,24 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
     }
   };
 
-  const handleSpeak = (text: string) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'ja-JP';
-      utterance.rate = 0.85;
-      window.speechSynthesis.speak(utterance);
-    }
-  };
+  const handleSpeak = speakJapanese;
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-1 sm:px-4">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 sm:px-6">
       {/* Top Filter Bar */}
       <div className={`border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${styles.filterBar}`}>
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          <select
-            value={selectedType}
-            onChange={(e) => { setSelectedType(e.target.value); setCurrentIndex(0); }}
-            className={`border text-xs font-semibold px-4 py-2.5 rounded-xl focus:outline-none focus:border-rose-500 cursor-pointer flex-1 sm:flex-none ${styles.dropdown}`}
-          >
-            <option value="ALL">All Types (Kanji, Kotoba, Bunpou)</option>
-            <option value="kanji">Kanji</option>
-            <option value="kotoba">Kotoba</option>
-            <option value="bunpou">Bunpou</option>
-          </select>
+          <div className="inline-flex rounded-xl border border-slate-700 p-1" role="group" aria-label="Flashcard type">
+            {[
+              { value: 'ALL', label: 'All' },
+              { value: 'kanji', label: 'Kanji' },
+              { value: 'kotoba', label: 'Kotoba' },
+            ].map((type) => (
+              <button key={type.value} type="button" aria-pressed={selectedType === type.value} onClick={() => { setSelectedType(type.value as typeof selectedType); setCurrentIndex(0); }} className={`rounded-lg px-3 py-2 text-xs font-bold ${selectedType === type.value ? 'bg-rose-500 text-white' : styles.textMuted}`}>
+                {type.label}
+              </button>
+            ))}
+          </div>
 
           <select
             value={selectedLevel}
@@ -181,12 +191,13 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
 
           <select
             value={selectedStatus}
-            onChange={(e) => { setSelectedStatus(e.target.value); setCurrentIndex(0); }}
+            onChange={(e) => { setSelectedStatus(e.target.value as typeof selectedStatus); setCurrentIndex(0); }}
             className={`border text-xs font-semibold px-4 py-2.5 rounded-xl focus:outline-none focus:border-rose-500 cursor-pointer flex-1 sm:flex-none ${styles.dropdown}`}
           >
             <option value="ALL">All Statuses</option>
-            <option value="LEARNING">Belum Hafal</option>
-            <option value="MASTERED">Sudah Hafal</option>
+            <option value="new">New</option>
+            <option value="learning">Learning</option>
+            <option value="mastered">Mastered</option>
           </select>
 
           <label className={`flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 ${styles.dropdown}`}>
@@ -221,10 +232,10 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
               <ChevronLeft size={20} />
             </button>
 
-            <div className={`mx-auto grid w-full min-w-0 gap-6 transition-all duration-300 ${isKanji ? 'max-w-7xl grid-cols-1 md:grid-cols-12' : 'max-w-3xl grid-cols-1'}`}>
+            <div className={`mx-auto grid w-full min-w-0 gap-6 transition-all duration-300 ${isKanji || isKotoba ? 'max-w-7xl grid-cols-1 md:grid-cols-12' : 'max-w-3xl grid-cols-1'}`}>
             
             {/* Primary 3D Flashcard Box */}
-            <div className={`w-full h-96 md:h-[400px] perspective-1000 select-none ${isKanji ? 'md:col-span-7' : ''}`}>
+            <div className={`w-full h-96 md:h-[400px] perspective-1000 select-none ${isKanji || isKotoba ? 'md:col-span-7' : ''}`}>
               <div
                 className={`relative w-full h-full duration-500 transform-style-3d cursor-pointer ${isFlipped ? 'rotate-y-180' : ''}`}
                 onClick={() => setIsFlipped(!isFlipped)}
@@ -250,12 +261,15 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
                       <span className="px-3 py-1 bg-rose-500/10 text-rose-500 text-xs font-black rounded-xl border border-rose-500/20">
                         {currentItem.jlptLevel}
                       </span>
+                      <span className={`mastery-indicator ${currentItem.isMastered ? 'mastered' : currentItem.masteryStreak ? 'learning' : 'new'}`} title={currentItem.isMastered ? 'Mastered' : currentItem.masteryStreak ? `Learning ${currentItem.masteryStreak}/3` : 'New item'} />
                     </div>
                   </div>
 
                   <div className="text-center my-auto space-y-3">
                     <h2 className={`text-7xl md:text-8xl font-black mb-2 tracking-tight ${styles.textMain}`}>
-                      {currentItem.japanese}
+                      {isKotoba
+                        ? <FuriganaText text={currentItem.japanese} reading={currentItem.reading} />
+                        : currentItem.japanese}
                     </h2>
                     {isKanji ? (
                       <div className={`mx-auto flex flex-col items-center gap-1 text-sm ${styles.textSub}`}>
@@ -289,7 +303,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
 
                   <div className="my-auto max-h-[250px] w-full space-y-3 overflow-y-auto text-center">
                     <p className={`text-xs font-semibold uppercase tracking-wide ${styles.textMuted}`}>Readings</p>
-                    <p className="text-xl font-bold text-rose-500">{currentItem.reading}</p>
+                    <p className="text-xl font-bold text-rose-500"><FuriganaText text={currentItem.reading} /></p>
                     <h3 className={`text-4xl font-extrabold ${styles.textMain}`}>{currentItem.meaning}</h3>
 
                     {currentItem.structure && (
@@ -308,7 +322,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
 
                     {currentItem.exampleJp && (
                       <div className={`text-xs p-3.5 rounded-2xl border mt-2 ${isDark ? 'bg-[#0d1117] border-slate-800 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
-                        <p className={`italic ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>"{currentItem.exampleJp}"</p>
+                          <p className={`italic ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>&quot;<FuriganaText text={currentItem.exampleJp} word={isKotoba ? currentItem.japanese : undefined} reading={isKotoba ? currentItem.reading : undefined} />&quot;</p>
                         {currentItem.exampleMeaning && <p className={`not-italic mt-0.5 ${styles.textMuted}`}>{currentItem.exampleMeaning}</p>}
                       </div>
                     )}
@@ -367,6 +381,29 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
                   Petunjuk visual penulisan Kanji
                 </div>
               </div>
+            )}
+
+            {isKotoba && (
+              <aside className={`md:col-span-5 h-96 md:h-[400px] border rounded-3xl p-6 flex flex-col justify-between ${styles.sidePanelBg}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-rose-500">Example Sentences</span>
+                    <p className={`mt-1 text-xs ${styles.textMuted}`}>Kotoba listening practice</p>
+                  </div>
+                  <button type="button" onClick={() => handleSpeak(`${currentItem.japanese}。${currentItem.reading}。${currentItem.exampleJp ?? ''}`)} className={`rounded-lg border p-2 ${styles.dropdown}`} aria-label="Play Kotoba audio" title="Play audio">
+                    <Volume2 size={18} />
+                  </button>
+                </div>
+                {currentItem.exampleJp ? (
+                  <div className={`rounded-xl border p-4 ${styles.gridBg}`}>
+                      <p className={`italic ${isDark ? 'text-slate-200' : 'text-slate-800'}`}><FuriganaText text={currentItem.exampleJp} word={currentItem.japanese} reading={currentItem.reading} /></p>
+                    {currentItem.exampleMeaning && <p className={`mt-2 text-sm ${styles.textMuted}`}>{currentItem.exampleMeaning}</p>}
+                  </div>
+                ) : <p className={`text-sm ${styles.textMuted}`}>No example sentence available.</p>}
+                <button type="button" onClick={() => handleSpeak(currentItem.exampleJp || currentItem.japanese)} className="quiz-button primary">
+                  <Volume2 size={16} /> Play Example
+                </button>
+              </aside>
             )}
 
           </div>

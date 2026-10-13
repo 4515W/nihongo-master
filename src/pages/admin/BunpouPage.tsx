@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
+import { parseConjugationRules } from '../../lib/grammar';
 import type { BunpouItem } from '../../types/database';
 
 const emptyForm = {
@@ -10,6 +11,8 @@ const emptyForm = {
   meaning: '',
   jlpt_level: 'N5',
   example_sentence: '',
+  nuance: '',
+  conjugation_rules: '{}',
 };
 
 export function BunpouPage() {
@@ -40,12 +43,21 @@ export function BunpouPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    let conjugationRules: Record<string, string>;
+    try {
+      conjugationRules = parseConjugationRules(form.conjugation_rules);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Invalid conjugation rules.');
+      return;
+    }
     const payload = {
       title: form.title,
       structure: form.structure,
       meaning: form.meaning,
       jlpt_level: form.jlpt_level,
       example_sentence: form.example_sentence,
+      nuance: form.nuance,
+      conjugation_rules: conjugationRules,
     };
 
     const { error: insertError } = await (supabase.from('bunpou') as any).insert([payload]);
@@ -87,6 +99,8 @@ export function BunpouPage() {
         meaning: String(row.meaning ?? ''),
         jlpt_level: String(row.jlpt_level ?? 'N5'),
         example_sentence: String(row.example_sentence ?? ''),
+        nuance: String(row.nuance ?? ''),
+        conjugation_rules: parseConjugationRules(row.conjugation_rules ?? '{}'),
       }));
 
       const { error: importError } = await (supabase.from('bunpou') as any).insert(normalized as any[]);
@@ -130,6 +144,8 @@ export function BunpouPage() {
               <input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} placeholder="Title" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
               <input value={form.structure} onChange={(event) => setForm((current) => ({ ...current, structure: event.target.value }))} placeholder="Structure" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
               <input value={form.meaning} onChange={(event) => setForm((current) => ({ ...current, meaning: event.target.value }))} placeholder="Meaning" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
+              <textarea value={form.nuance} onChange={(event) => setForm((current) => ({ ...current, nuance: event.target.value }))} placeholder="Nuance and usage notes" rows={3} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
+              <textarea value={form.conjugation_rules} onChange={(event) => setForm((current) => ({ ...current, conjugation_rules: event.target.value }))} placeholder={'Conjugation rules JSON: {"verbs":"...","nouns":"...","adjectives":"..."}'} rows={4} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400" />
               <div className="grid gap-4 sm:grid-cols-2">
                 <select value={form.jlpt_level} onChange={(event) => setForm((current) => ({ ...current, jlpt_level: event.target.value }))} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400">
                   <option value="N5">N5</option>
@@ -152,7 +168,7 @@ export function BunpouPage() {
                 <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleExcelImport} />
               </label>
             </div>
-            <p className="text-sm text-slate-400">Use columns: title, structure, meaning, jlpt_level, example_sentence</p>
+            <p className="text-sm text-slate-400">Use columns: title, structure, meaning, jlpt_level, example_sentence, nuance, conjugation_rules (JSON)</p>
           </div>
         </div>
 

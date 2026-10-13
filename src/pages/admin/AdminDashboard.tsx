@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
+import { parseConjugationRules } from '../../lib/grammar';
+import { useBackDismiss } from '../../lib/useBackDismiss';
 import type {
   BunpouItem,
   Database,
@@ -55,6 +57,8 @@ const defaultBunpouForm = {
   meaning: '',
   jlpt_level: 'N5',
   example_sentence: '',
+  nuance: '',
+  conjugation_rules: '{}',
 };
 
 const defaultQuestionForm = {
@@ -69,7 +73,7 @@ const defaultQuestionForm = {
 const sampleTemplateHeaders: Record<TableName, string[]> = {
   kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count'],
   kotoba: ['word', 'reading', 'meaning', 'jlpt_level', 'part_of_speech', 'example_sentence', 'example_meaning'],
-  bunpou: ['title', 'structure', 'meaning', 'jlpt_level', 'example_sentence'],
+  bunpou: ['title', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'nuance', 'conjugation_rules'],
   questions: ['exam_type', 'section', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation'],
 };
 
@@ -123,6 +127,7 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
+  useBackDismiss(modalMode !== null, () => setModalMode(null));
   const [selectedRow, setSelectedRow] = useState<EntityRow | null>(null);
   const [formError, setFormError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -307,7 +312,7 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
       </div>
 
       {modalMode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalMode(null); }}>
+        <div className="admin-modal-overlay fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalMode(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="entity-modal-title" className="my-auto max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
             <div className="mb-5 flex items-center justify-between">
               <h3 id="entity-modal-title" className="text-lg font-semibold text-white">{modalMode === 'view' ? `View ${title}` : `${modalMode === 'edit' ? 'Edit' : 'Add'} ${title}`}</h3>
@@ -332,6 +337,8 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
                         <select value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
                           {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
+                      ) : field.type === 'textarea' ? (
+                        <textarea rows={4} value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400" />
                       ) : (
                         <input type={field.type ?? 'text'} value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
                       )}
@@ -427,7 +434,7 @@ function AdminDashboard() {
       : kind === 'kotoba'
       ? kotobaForm
       : kind === 'bunpou'
-      ? bunpouForm
+      ? { ...bunpouForm, conjugation_rules: parseConjugationRules(bunpouForm.conjugation_rules) }
       : {
           exam_type: questionForm.exam_type,
           section: questionForm.section,
@@ -450,7 +457,7 @@ function AdminDashboard() {
       setKotobaForm({ word: item.word, reading: item.reading ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, part_of_speech: item.part_of_speech ?? '', example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '' });
     } else if (kind === 'bunpou') {
       const item = row as BunpouItem;
-      setBunpouForm({ title: item.title, structure: item.structure, meaning: item.meaning, jlpt_level: item.jlpt_level, example_sentence: item.example_sentence ?? '' });
+      setBunpouForm({ title: item.title, structure: item.structure, meaning: item.meaning, jlpt_level: item.jlpt_level, example_sentence: item.example_sentence ?? '', nuance: item.nuance ?? '', conjugation_rules: JSON.stringify(item.conjugation_rules ?? {}, null, 2) });
     } else {
       const item = row as Question;
       setQuestionForm({ exam_type: item.exam_type, section: item.section, question_text: item.question_text, options: [item.options[0] ?? '', item.options[1] ?? '', item.options[2] ?? '', item.options[3] ?? ''], correct_answer: item.correct_answer, explanation: item.explanation ?? '' });
@@ -542,6 +549,8 @@ function AdminDashboard() {
       meaning: bunpouForm.meaning,
       jlpt_level: bunpouForm.jlpt_level,
       example_sentence: bunpouForm.example_sentence,
+      nuance: bunpouForm.nuance,
+      conjugation_rules: parseConjugationRules(bunpouForm.conjugation_rules),
     };
 
     const { error } = await (supabase.from('bunpou') as any).insert([payload]);
@@ -692,6 +701,8 @@ function AdminDashboard() {
               { label: 'Meaning', name: 'meaning', value: bunpouForm.meaning, onChange: (value) => setBunpouForm((current) => ({ ...current, meaning: value })) },
               { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: bunpouForm.jlpt_level, onChange: (value) => setBunpouForm((current) => ({ ...current, jlpt_level: value })) },
               { label: 'Example Sentence', name: 'example_sentence', value: bunpouForm.example_sentence, onChange: (value) => setBunpouForm((current) => ({ ...current, example_sentence: value })) },
+              { label: 'Nuance & Usage Notes', name: 'nuance', type: 'textarea', value: bunpouForm.nuance, onChange: (value) => setBunpouForm((current) => ({ ...current, nuance: value })) },
+              { label: 'Conjugation Rules (JSON)', name: 'conjugation_rules', type: 'textarea', value: bunpouForm.conjugation_rules, onChange: (value) => setBunpouForm((current) => ({ ...current, conjugation_rules: value })) },
             ],
           },
           handleBunpouCreate,
@@ -931,6 +942,8 @@ function normalizeImportedRow(table: TableName, row: Record<string, unknown>) {
         meaning: String(row.meaning ?? ''),
         jlpt_level: String(row.jlpt_level ?? 'N5'),
         example_sentence: String(row.example_sentence ?? ''),
+        nuance: String(row.nuance ?? ''),
+        conjugation_rules: parseConjugationRules(row.conjugation_rules),
       };
     case 'questions': {
       const options = [

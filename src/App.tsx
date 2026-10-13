@@ -1,10 +1,11 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { StudyItem } from './types';
 import './App.css';
 import { FlashcardsPage } from './components/FlashcardPage';
 import { QuizPage } from './components/QuizPage';
 import { DataBankPage } from './components/DataBankPage';
+import { BunpouStudyPage } from './components/BunpouStudyPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
@@ -14,6 +15,8 @@ import { BunpouPage } from './pages/admin/BunpouPage';
 import { QuestionPage } from './pages/admin/QuestionPage';
 import { StudyDataPage } from './pages/StudyDataPage';
 import { supabase } from './lib/supabase';
+import { useBackDismiss } from './lib/useBackDismiss';
+import type { UserItemProgress } from './types/database';
 import {
   Layers,
   BrainCircuit,
@@ -27,9 +30,30 @@ import {
   Moon,
   ChevronDown,
   LogOut,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import type { ItemType } from './types';
+import type { QuizProgressResult } from './lib/progress';
 
 type ThemeMode = 'black' | 'light';
+type AppTab = 'dashboard' | 'flashcards' | 'bunpou' | 'quiz' | 'databank';
+const jlptLevels = ['N5', 'N4', 'N3', 'N2', 'N1'] as const;
+const masteryCategories = [
+  { type: 'kanji', label: 'Kanji', color: 'rose' },
+  { type: 'kotoba', label: 'Kotoba', color: 'blue' },
+  { type: 'bunpou', label: 'Bunpou', color: 'purple' },
+] as const;
+
+interface DashboardStats {
+  masteredCount: number | null;
+  masteredItemIdsByType: Record<ItemType, string[]> | null;
+  quizAttempts: number;
+  quizCorrect: number;
+  completedItems: number;
+}
+
+const emptyDashboardStats: DashboardStats = { masteredCount: null, masteredItemIdsByType: null, quizAttempts: 0, quizCorrect: 0, completedItems: 0 };
 
 const fetchStudyData = async (): Promise<StudyItem[]> => {
   const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
@@ -41,8 +65,21 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
   const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
   const kotobaRows = (kotobaRes.data ?? []) as Record<string, any>[];
   const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
+  const { data: { user } } = await supabase.auth.getUser();
+  let progressRows: UserItemProgress[] = [];
+  if (user) {
+    const { data, error } = await supabase
+      .from('user_item_progress')
+      .select('*')
+      .eq('user_id', user.id);
+    if (error) {
+      console.warn('Unable to load study progress:', error.message);
+    } else {
+      progressRows = data ?? [];
+    }
+  }
 
-  const allRows = [
+  const allRows: StudyItem[] = [
     ...kanjiRows.map((item) => ({
       id: String(item.id),
       type: 'kanji' as const,
@@ -76,22 +113,78 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
       meaning: String(item.meaning ?? ''),
       jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
       structure: String(item.structure ?? ''),
+      nuance: item.nuance ? String(item.nuance) : undefined,
+      conjugationRules: item.conjugation_rules ?? undefined,
       exampleJp: String(item.example_sentence ?? ''),
       isMastered: false,
       createdAt: item.created_at ?? new Date().toISOString(),
     })),
   ];
 
-  return allRows;
+  const progressByItem = new Map(progressRows.map((progress) => [`${progress.item_type}:${progress.item_id}`, progress]));
+  return allRows.map((item) => {
+    const progress = progressByItem.get(`${item.type}:${item.id}`);
+    return {
+      ...item,
+      isMastered: progress?.is_mastered ?? false,
+      masteryStreak: progress?.streak_count ?? 0,
+      masteryStatus: progress?.is_mastered ? 'mastered' : progress?.streak_count ? 'learning' : 'new',
+    };
+  });
+};
+
+const fetchDashboardStats = async (): Promise<DashboardStats> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return emptyDashboardStats;
+
+  const [masteryResult, historyResult] = await Promise.all([
+    supabase.from('user_item_progress').select('item_type, item_id').eq('user_id', user.id).eq('is_mastered', true),
+    supabase.from('user_quiz_history').select('item_type, item_id, is_correct').eq('user_id', user.id),
+  ]);
+
+  if (masteryResult.error || historyResult.error) {
+    console.warn('Unable to load dashboard quiz stats:', masteryResult.error?.message ?? historyResult.error?.message);
+    return emptyDashboardStats;
+  }
+
+  const history = historyResult.data ?? [];
+  const masteredItemIdsByType: Record<ItemType, string[]> = { kanji: [], kotoba: [], bunpou: [] };
+  for (const progress of masteryResult.data ?? []) {
+    masteredItemIdsByType[progress.item_type].push(progress.item_id);
+  }
+
+  return {
+    masteredCount: Object.values(masteredItemIdsByType).reduce((count, itemIds) => count + itemIds.length, 0),
+    masteredItemIdsByType,
+    quizAttempts: history.length,
+    quizCorrect: history.filter((entry) => entry.is_correct).length,
+    completedItems: new Set(history.map((entry) => `${entry.item_type}:${entry.item_id}`)).size,
+  };
 };
 
 function AppShell() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [items, setItems] = useState<StudyItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(emptyDashboardStats);
+  const [expandedLevel, setExpandedLevel] = useState<string | null>('N5');
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'flashcards' | 'quiz' | 'databank'>('dashboard');
+  const activeTab = ({
+    '/': 'dashboard',
+    '/flashcards': 'flashcards',
+    '/bunpou-study': 'bunpou',
+    '/quiz': 'quiz',
+    '/data-bank': 'databank',
+  } as Record<string, AppTab>)[location.pathname] ?? 'dashboard';
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  useBackDismiss(isMenuOpen || isProfileMenuOpen, () => {
+    setIsMenuOpen(false);
+    setIsProfileMenuOpen(false);
+  });
+  const [showFurigana, setShowFurigana] = useState(() => localStorage.getItem('nihongo_master_furigana') !== 'false');
+  const [targetedQuizItem, setTargetedQuizItem] = useState<StudyItem | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const savedTheme = localStorage.getItem('nihongo_master_theme');
     return savedTheme === 'light' ? 'light' : 'black';
@@ -99,7 +192,13 @@ function AppShell() {
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [currentUserDisplayName, setCurrentUserDisplayName] = useState('');
   const [isAdminUser, setIsAdminUser] = useState(false);
-  const navigate = useNavigate();
+  const locationState = location.state as { dailyReviewIds?: string[]; targetedQuizItemId?: string; targetedQuizItemType?: ItemType } | null;
+  const dailyReviewIds = new Set(locationState?.dailyReviewIds ?? []);
+  const dailyReviewItems = items.filter((item) => dailyReviewIds.has(`${item.type}:${item.id}`));
+  const routeTarget = locationState?.targetedQuizItemId
+    ? items.find((item) => item.id === locationState.targetedQuizItemId && item.type === locationState.targetedQuizItemType)
+    : undefined;
+  const quizTarget = targetedQuizItem ?? routeTarget ?? null;
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const displayName = currentUserDisplayName || currentUserEmail.split('@')[0] || 'Student';
 
@@ -108,9 +207,10 @@ function AppShell() {
 
     const loadData = async () => {
       setIsLoading(true);
-      const data = await fetchStudyData();
+      const [data, stats] = await Promise.all([fetchStudyData(), fetchDashboardStats()]);
       if (!mounted) return;
       setItems(data);
+      setDashboardStats(stats);
       setIsLoading(false);
     };
 
@@ -124,6 +224,10 @@ function AppShell() {
   useEffect(() => {
     localStorage.setItem('nihongo_master_theme', themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    localStorage.setItem('nihongo_master_furigana', String(showFurigana));
+  }, [showFurigana]);
 
   useEffect(() => {
     const closeProfileMenu = (event: MouseEvent) => {
@@ -221,17 +325,39 @@ function AppShell() {
   const bunpouMastered = bunpouItems.filter((i) => i.isMastered).length;
 
   const totalMastered = items.filter((i) => i.isMastered).length;
-  const totalAccuracy = items.length > 0 ? Math.round((totalMastered / items.length) * 100) : 0;
+  const displayedTotalMastered = dashboardStats.masteredCount ?? totalMastered;
+  const dashboardMasteredItems = dashboardStats.masteredItemIdsByType
+    ? new Set(Object.entries(dashboardStats.masteredItemIdsByType).flatMap(([type, ids]) => ids.map((id) => `${type}:${id}`)))
+    : null;
+  const totalAccuracy = dashboardStats.quizAttempts > 0 ? Math.round((dashboardStats.quizCorrect / dashboardStats.quizAttempts) * 100) : 0;
 
   const handleResetSampleData = async () => {
-    const refreshed = await fetchStudyData();
+    const [refreshed, stats] = await Promise.all([fetchStudyData(), fetchDashboardStats()]);
     setItems(refreshed);
+    setDashboardStats(stats);
   };
 
-  const handleToggleMastery = (id: string, isMastered: boolean) => {
+  const navigateToTab = (tab: AppTab) => {
+    const tabPath: Record<AppTab, string> = { dashboard: '/', flashcards: '/flashcards', bunpou: '/bunpou-study', quiz: '/quiz', databank: '/data-bank' };
+    navigate(tabPath[tab], { replace: isMenuOpen });
+  };
+
+  const handleDailyReview = () => {
+    const unmasteredItems = items.filter((item) => !item.isMastered);
+    if (!unmasteredItems.length) {
+      window.alert('Everything is mastered. Great work!');
+      return;
+    }
+    const reviewItems = [...unmasteredItems].sort(() => Math.random() - 0.5).slice(0, 5);
+    navigate('/quiz', { state: { dailyReviewIds: reviewItems.map((item) => `${item.type}:${item.id}`) } });
+  };
+
+  const handleMasteryUpdate = (type: ItemType, id: string, progress: QuizProgressResult) => {
     setItems((currentItems) =>
       currentItems.map((item) =>
-        item.id === id ? { ...item, isMastered } : item,
+        item.id === id && item.type === type
+          ? { ...item, isMastered: progress.isMastered, masteryStreak: progress.streakCount, masteryStatus: progress.isMastered ? 'mastered' : progress.streakCount ? 'learning' : 'new' }
+          : item,
       ),
     );
   };
@@ -246,7 +372,7 @@ function AppShell() {
   };
 
   return (
-    <div className={`app-shell ${themeMode === 'light' ? 'theme-light' : 'theme-black'}`}>
+    <div className={`app-shell ${themeMode === 'light' ? 'theme-light' : 'theme-black'} ${showFurigana ? '' : 'furigana-hidden'}`}>
       <nav className="top-nav">
         <div className="brand-wrap">
           <div className="brand-mark">日</div>
@@ -263,7 +389,10 @@ function AppShell() {
           className="mobile-menu-toggle"
           aria-label="Toggle navigation menu"
           aria-expanded={isMenuOpen}
-          onClick={() => setIsMenuOpen((prev) => !prev)}
+          onClick={() => {
+            setIsProfileMenuOpen(false);
+            setIsMenuOpen((prev) => !prev);
+          }}
         >
           {isMenuOpen ? <X size={18} /> : <Menu size={18} />}
         </button>
@@ -273,6 +402,7 @@ function AppShell() {
             {[
               { id: 'dashboard', label: 'Dashboard' },
               { id: 'flashcards', label: 'Flashcards' },
+              { id: 'bunpou', label: 'Bunpou' },
               { id: 'quiz', label: 'Quiz' },
               { id: 'databank', label: 'Data Bank' },
             ].map((tab) => {
@@ -282,7 +412,7 @@ function AppShell() {
                   key={tab.id}
                   type="button"
                   onClick={() => {
-                    setActiveTab(tab.id as any);
+                    navigateToTab(tab.id as AppTab);
                     setIsMenuOpen(false);
                   }}
                   className={`tab-button ${isActive ? 'active' : ''}`}
@@ -317,6 +447,18 @@ function AppShell() {
               </button>
             </div>
 
+            <button
+              type="button"
+              className={`furigana-toggle ${showFurigana ? 'is-active' : ''}`}
+              onClick={() => setShowFurigana((visible) => !visible)}
+              aria-pressed={showFurigana}
+              aria-label={showFurigana ? 'Hide furigana' : 'Show furigana'}
+              title={showFurigana ? 'Furigana on' : 'Furigana off'}
+            >
+              {showFurigana ? <Eye size={17} /> : <EyeOff size={17} />}
+              <span>Furigana</span>
+            </button>
+
             {currentUserEmail && (
               <div className="profile-menu" ref={profileMenuRef}>
                 <button
@@ -324,7 +466,10 @@ function AppShell() {
                   className="profile-trigger"
                   aria-expanded={isProfileMenuOpen}
                   aria-haspopup="menu"
-                  onClick={() => setIsProfileMenuOpen((open) => !open)}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsProfileMenuOpen((open) => !open);
+                  }}
                   title={currentUserEmail}
                 >
                   <span className="profile-avatar" aria-hidden="true">{displayName.charAt(0).toLocaleUpperCase()}</span>
@@ -335,7 +480,7 @@ function AppShell() {
                   <div className="profile-dropdown" role="menu">
                     <span className="profile-email">{currentUserEmail}</span>
                     {isAdminUser && (
-                      <button type="button" role="menuitem" onClick={() => { setIsProfileMenuOpen(false); navigate('/admin/dashboard'); }}>
+                      <button type="button" role="menuitem" onClick={() => { setIsProfileMenuOpen(false); navigate('/admin/dashboard', { replace: true }); }}>
                         Admin Dashboard
                       </button>
                     )}
@@ -365,11 +510,14 @@ function AppShell() {
                   Track your progress, review flashcards, and test your skills in Kanji, Kotoba, and Bunpou.
                 </p>
                 <div className="hero-actions">
-                  <button onClick={() => setActiveTab('flashcards')} className="primary-action">
+                  <button onClick={() => navigateToTab('flashcards')} className="primary-action">
                     <Play size={14} className="fill-current" /> Start Flashcards
                   </button>
-                  <button onClick={() => setActiveTab('quiz')} className="secondary-action">
+                  <button onClick={() => navigateToTab('quiz')} className="secondary-action">
                     <BrainCircuit size={14} /> Take Kuis Mode
+                  </button>
+                  <button onClick={handleDailyReview} className="secondary-action">
+                    <RotateCcw size={14} /> Daily Review Quiz
                   </button>
                 </div>
               </div>
@@ -407,7 +555,7 @@ function AppShell() {
                 <div>
                   <p className="stat-label">Accuracy Rate</p>
                   <h3>{totalAccuracy}%</h3>
-                  <p className="stat-subtle">{totalMastered} Items Completed</p>
+                  <p className="stat-subtle">{displayedTotalMastered} Items Mastered · {dashboardStats.completedItems} Completed</p>
                 </div>
                 <div className="stat-icon amber">
                   <Trophy size={22} />
@@ -422,22 +570,47 @@ function AppShell() {
                 </h3>
 
                 <div className="progress-list">
-                  {['N5', 'N4', 'N3'].map((level) => {
+                  {jlptLevels.map((level) => {
                     const levelItems = items.filter((i) => i.jlptLevel === level);
-                    const levelMastered = levelItems.filter((i) => i.isMastered).length;
-                    const percentage = levelItems.length > 0 ? Math.round((levelMastered / levelItems.length) * 100) : 0;
+                    const levelMastered = levelItems.filter((item) => dashboardMasteredItems?.has(`${item.type}:${item.id}`) ?? item.isMastered).length;
+                    const isExpanded = expandedLevel === level;
 
                     return (
-                      <div key={level} className="progress-item">
-                        <div className="progress-header">
-                          <span>JLPT {level}</span>
-                          <span>
-                            {levelMastered} / {levelItems.length} Mastered ({percentage}%)
+                      <div key={level} className={`jlpt-accordion-item${isExpanded ? ' is-expanded' : ''}`}>
+                        <button
+                          type="button"
+                          className="jlpt-accordion-header"
+                          aria-expanded={isExpanded}
+                          aria-controls={`jlpt-panel-${level}`}
+                          onClick={() => setExpandedLevel(isExpanded ? null : level)}
+                        >
+                          <span className="jlpt-accordion-title">
+                            <ChevronDown size={17} className="jlpt-accordion-chevron" aria-hidden="true" />
+                            JLPT {level}
                           </span>
-                        </div>
-                        <div className="progress-track">
-                          <div className="progress-bar" style={{ width: `${percentage}%` }} />
-                        </div>
+                          <span className="jlpt-accordion-summary">{levelMastered} / {levelItems.length} items mastered</span>
+                        </button>
+                        {isExpanded && (
+                          <div className="jlpt-category-grid" id={`jlpt-panel-${level}`}>
+                            {masteryCategories.map((category) => {
+                              const categoryItems = levelItems.filter((item) => item.type === category.type);
+                              const mastered = categoryItems.filter((item) => dashboardMasteredItems?.has(`${item.type}:${item.id}`) ?? item.isMastered).length;
+                              const percentage = categoryItems.length ? Math.round((mastered / categoryItems.length) * 100) : 0;
+                              return (
+                                <div className={`jlpt-category-card ${category.color}`} key={category.type}>
+                                  <span className={`jlpt-category-badge ${category.color}`}>{category.label}</span>
+                                  <div className="jlpt-category-card-stats">
+                                    <span className="jlpt-progress-count">{mastered} / {categoryItems.length}</span>
+                                    <span className="jlpt-category-percentage">{percentage}%</span>
+                                  </div>
+                                  <div className="progress-track">
+                                    <div className={`progress-bar ${category.color}`} style={{ width: `${percentage}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -469,13 +642,35 @@ function AppShell() {
         {activeTab === 'flashcards' && (
           <FlashcardsPage
             items={items}
-            onToggleMastery={handleToggleMastery}
             isDark={themeMode === 'black'}
           />
         )}
 
+        {activeTab === 'bunpou' && (
+          <BunpouStudyPage
+            items={items}
+            onTestThisPoint={(item) => {
+              setTargetedQuizItem(item);
+              navigate('/quiz', { state: { targetedQuizItemId: item.id, targetedQuizItemType: item.type } });
+            }}
+          />
+        )}
+
         {activeTab === 'quiz' && (
-          <QuizPage items={items} isDark={themeMode === 'black'} />
+          <QuizPage
+            items={items}
+            isDark={themeMode === 'black'}
+            dailyReviewItems={dailyReviewItems}
+            targetedItemId={quizTarget?.id ?? null}
+            targetedItemType={quizTarget?.type ?? null}
+            onMasteryUpdate={handleMasteryUpdate}
+            onQuizAttempt={() => { void fetchDashboardStats().then(setDashboardStats); }}
+            onBackToDashboard={() => { setTargetedQuizItem(null); navigate('/'); }}
+            onSelectCategory={() => {
+              setTargetedQuizItem(null);
+              navigate(location.pathname, { replace: true, state: null });
+            }}
+          />
         )}
 
         {activeTab === 'databank' && (
@@ -499,6 +694,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/flashcards" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
+        <Route path="/bunpou-study" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
+        <Route path="/data-bank" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
         <Route path="/login" element={<LoginPage />} />
         <Route
           path="/kanji"
@@ -528,7 +726,7 @@ export default function App() {
           path="/quiz"
           element={
             <ProtectedRoute>
-              <QuizRoutePage />
+              <AppShell />
             </ProtectedRoute>
           }
         />
@@ -576,78 +774,4 @@ export default function App() {
       </Routes>
     </BrowserRouter>
   );
-}
-
-function QuizRoutePage() {
-  const [items, setItems] = useState<StudyItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const load = async () => {
-      const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
-        supabase.from('kanji').select('*'),
-        supabase.from('kotoba').select('*'),
-        supabase.from('bunpou').select('*'),
-      ]);
-
-      if (!mounted) return;
-
-      const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
-      const kotobaRows = (kotobaRes.data ?? []) as Record<string, any>[];
-      const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
-
-      const nextItems: StudyItem[] = [
-        ...kanjiRows.map((item) => ({
-          id: String(item.id),
-          type: 'kanji' as const,
-          japanese: String(item.kanji ?? ''),
-          reading: [item.onyomi, item.kunyomi].filter(Boolean).join(' / ') || '—',
-          onyomi: String(item.onyomi ?? ''),
-          kunyomi: String(item.kunyomi ?? ''),
-          meaning: String(item.meaning ?? ''),
-          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
-          isMastered: false,
-          createdAt: item.created_at ?? new Date().toISOString(),
-        })),
-        ...kotobaRows.map((item) => ({
-          id: String(item.id),
-          type: 'kotoba' as const,
-          japanese: String(item.word ?? ''),
-          reading: String(item.reading ?? '—'),
-          meaning: String(item.meaning ?? ''),
-          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
-          isMastered: false,
-          createdAt: item.created_at ?? new Date().toISOString(),
-        })),
-        ...bunpouRows.map((item) => ({
-          id: String(item.id),
-          type: 'bunpou' as const,
-          japanese: String(item.title ?? ''),
-          reading: String(item.structure ?? '—'),
-          meaning: String(item.meaning ?? ''),
-          jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
-          structure: String(item.structure ?? ''),
-          exampleJp: String(item.example_sentence ?? ''),
-          isMastered: false,
-          createdAt: item.created_at ?? new Date().toISOString(),
-        })),
-      ];
-
-      setItems(nextItems);
-      setLoading(false);
-    };
-
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  if (loading) {
-    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">Loading quiz data...</div>;
-  }
-
-  return <QuizPage items={items} isDark />;
 }

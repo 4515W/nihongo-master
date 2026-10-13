@@ -1,5 +1,7 @@
 import { useMemo, useState, type FC } from 'react';
 import type { StudyItem } from '../types';
+import { FuriganaText } from './FuriganaText';
+import { useBackDismiss } from '../lib/useBackDismiss';
 
 interface DataBankPageProps {
   items: StudyItem[];
@@ -10,6 +12,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
   const [selectedType, setSelectedType] = useState<'ALL' | StudyItem['type']>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<'ALL' | StudyItem['jlptLevel']>('ALL');
   const [selectedItem, setSelectedItem] = useState<StudyItem | null>(null);
+  useBackDismiss(selectedItem !== null, () => setSelectedItem(null));
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -139,16 +142,16 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
                 </span>
               </div>
 
-              <h3>{item.japanese}</h3>
+              <h3><FuriganaText text={item.japanese} reading={item.type === 'kotoba' ? item.reading : undefined} /></h3>
               <p>{item.meaning}</p>
 
               <div className="meta-row">
-                <span>{item.reading}</span>
+                <span><FuriganaText text={item.reading} /></span>
                 <span>{item.jlptLevel}</span>
               </div>
 
               {item.exampleJp && (
-                <div className="example-note">“{item.exampleJp}”</div>
+                <div className="example-note">“<FuriganaText text={item.exampleJp} word={item.type === 'kotoba' ? item.japanese : undefined} reading={item.type === 'kotoba' ? item.reading : undefined} />”</div>
               )}
             </article>
           ))}
@@ -179,8 +182,8 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
             </div>
 
             <div className="detail-body">
-              <h3>{selectedItem.japanese}</h3>
-              <p className="detail-reading">{selectedItem.reading}</p>
+              <h3><FuriganaText text={selectedItem.japanese} reading={selectedItem.type === 'kotoba' ? selectedItem.reading : undefined} /></h3>
+              <p className="detail-reading"><FuriganaText text={selectedItem.reading} /></p>
               <p className="detail-meaning">{selectedItem.meaning}</p>
 
               <div className="detail-meta">
@@ -198,7 +201,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
               {selectedItem.exampleJp && (
                 <div className="detail-box">
                   <label>Example</label>
-                  <p>{selectedItem.exampleJp}</p>
+                  <p><FuriganaText text={selectedItem.exampleJp} word={selectedItem.type === 'kotoba' ? selectedItem.japanese : undefined} reading={selectedItem.type === 'kotoba' ? selectedItem.reading : undefined} /></p>
                   {selectedItem.exampleMeaning && <small>{selectedItem.exampleMeaning}</small>}
                 </div>
               )}
