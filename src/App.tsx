@@ -1,4 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { StudyItem } from './types';
 import './App.css';
@@ -38,6 +39,13 @@ import type { QuizProgressResult } from './lib/progress';
 
 type ThemeMode = 'black' | 'light';
 type AppTab = 'dashboard' | 'flashcards' | 'bunpou' | 'quiz' | 'databank';
+const navigationTabs: { id: AppTab; label: string }[] = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'flashcards', label: 'Flashcards' },
+  { id: 'bunpou', label: 'Bunpou' },
+  { id: 'quiz', label: 'Quiz' },
+  { id: 'databank', label: 'Data Bank' },
+];
 const jlptLevels = ['N5', 'N4', 'N3', 'N2', 'N1'] as const;
 const masteryCategories = [
   { type: 'kanji', label: 'Kanji', color: 'rose' },
@@ -55,11 +63,51 @@ interface DashboardStats {
 
 const emptyDashboardStats: DashboardStats = { masteredCount: null, masteredItemIdsByType: null, quizAttempts: 0, quizCorrect: 0, completedItems: 0 };
 
+interface AppProfile {
+  id: string;
+  role?: 'admin' | 'user';
+  full_name?: string | null;
+}
+
+const emptyAppProfile: AppProfile = { id: '' };
+
+const fetchAppProfile = async (userId: string): Promise<AppProfile> => {
+  if (!userId) return emptyAppProfile;
+
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, role, full_name')
+      .eq('id', userId)
+      .maybeSingle<AppProfile>();
+
+    return error ? emptyAppProfile : data ?? emptyAppProfile;
+  } catch {
+    return emptyAppProfile;
+  }
+};
+
+const fetchMasteredProgress = async (userId: string) => {
+  if (!userId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('user_item_progress')
+      .select('item_type, item_id')
+      .eq('user_id', userId)
+      .eq('is_mastered', true);
+
+    return error ? [] : data ?? [];
+  } catch {
+    return [];
+  }
+};
+
 const fetchStudyData = async (): Promise<StudyItem[]> => {
   const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
-    supabase.from('kanji').select('*'),
-    supabase.from('kotoba').select('*'),
-    supabase.from('bunpou').select('*'),
+    supabase.from('kanji').select('id, kanji, onyomi, kunyomi, meaning, jlpt_level, created_at'),
+    supabase.from('kotoba').select('id, word, reading, meaning, jlpt_level, example_sentence, example_meaning, related_words, created_at'),
+    supabase.from('bunpou').select('id, title, structure, meaning, jlpt_level, example_sentence, nuance, conjugation_rules, created_at'),
   ]);
 
   const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
@@ -67,14 +115,12 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
   const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
   const { data: { user } } = await supabase.auth.getUser();
   let progressRows: UserItemProgress[] = [];
-  if (user) {
+  if (user?.id) {
     const { data, error } = await supabase
       .from('user_item_progress')
-      .select('*')
+      .select('user_id, item_type, item_id, streak_count, is_mastered, created_at, updated_at')
       .eq('user_id', user.id);
-    if (error) {
-      console.warn('Unable to load study progress:', error.message);
-    } else {
+    if (!error) {
       progressRows = data ?? [];
     }
   }
@@ -135,21 +181,29 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
 
 const fetchDashboardStats = async (): Promise<DashboardStats> => {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return emptyDashboardStats;
+  if (!user?.id) return emptyDashboardStats;
 
-  const [masteryResult, historyResult] = await Promise.all([
-    supabase.from('user_item_progress').select('item_type, item_id').eq('user_id', user.id).eq('is_mastered', true),
-    supabase.from('user_quiz_history').select('item_type, item_id, is_correct').eq('user_id', user.id),
+  const historyPromise = (async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_quiz_history')
+        .select('item_type, item_id, is_correct')
+        .eq('user_id', user.id);
+
+      return error ? null : { data: data ?? [] };
+    } catch {
+      return null;
+    }
+  })();
+
+  const [masteredRows, historyResult] = await Promise.all([
+    fetchMasteredProgress(user.id),
+    historyPromise,
   ]);
 
-  if (masteryResult.error || historyResult.error) {
-    console.warn('Unable to load dashboard quiz stats:', masteryResult.error?.message ?? historyResult.error?.message);
-    return emptyDashboardStats;
-  }
-
-  const history = historyResult.data ?? [];
+  const history = historyResult?.data ?? [];
   const masteredItemIdsByType: Record<ItemType, string[]> = { kanji: [], kotoba: [], bunpou: [] };
-  for (const progress of masteryResult.data ?? []) {
+  for (const progress of masteredRows) {
     masteredItemIdsByType[progress.item_type].push(progress.item_id);
   }
 
@@ -179,7 +233,13 @@ function AppShell() {
   } as Record<string, AppTab>)[location.pathname] ?? 'dashboard';
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const closeMobileMenu = () => {
+    mobileMenuButtonRef.current?.focus();
+    setIsMenuOpen(false);
+  };
   useBackDismiss(isMenuOpen || isProfileMenuOpen, () => {
+    if (isMenuOpen) mobileMenuButtonRef.current?.focus();
     setIsMenuOpen(false);
     setIsProfileMenuOpen(false);
   });
@@ -192,6 +252,7 @@ function AppShell() {
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [currentUserDisplayName, setCurrentUserDisplayName] = useState('');
   const [isAdminUser, setIsAdminUser] = useState(false);
+  const appShellRef = useRef<HTMLDivElement>(null);
   const locationState = location.state as { dailyReviewIds?: string[]; targetedQuizItemId?: string; targetedQuizItemType?: ItemType } | null;
   const dailyReviewIds = new Set(locationState?.dailyReviewIds ?? []);
   const dailyReviewItems = items.filter((item) => dailyReviewIds.has(`${item.type}:${item.id}`));
@@ -258,19 +319,9 @@ function AppShell() {
 
       setCurrentUserEmail(session.user.email ?? '');
 
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('role, full_name')
-        .eq('id', session.user.id)
-        .maybeSingle<{ role: 'admin' | 'user'; full_name?: string | null }>();
+      const profile = await fetchAppProfile(session.user.id);
 
       if (!isMounted) return;
-
-      if (error) {
-        setIsAdminUser(false);
-        setCurrentUserDisplayName('');
-        return;
-      }
 
       setIsAdminUser(profile?.role === 'admin');
       setCurrentUserDisplayName(profile?.full_name?.trim() ?? '');
@@ -292,19 +343,9 @@ function AppShell() {
 
       setCurrentUserEmail(session.user.email ?? '');
 
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('role, full_name')
-        .eq('id', session.user.id)
-        .maybeSingle<{ role: 'admin' | 'user'; full_name?: string | null }>();
+      const profile = await fetchAppProfile(session.user.id);
 
       if (!isMounted) return;
-
-      if (error) {
-        setIsAdminUser(false);
-        setCurrentUserDisplayName('');
-        return;
-      }
 
       setIsAdminUser(profile?.role === 'admin');
       setCurrentUserDisplayName(profile?.full_name?.trim() ?? '');
@@ -372,7 +413,7 @@ function AppShell() {
   };
 
   return (
-    <div className={`app-shell ${themeMode === 'light' ? 'theme-light' : 'theme-black'} ${showFurigana ? '' : 'furigana-hidden'}`}>
+    <div ref={appShellRef} className={`app-shell ${themeMode === 'light' ? 'theme-light' : 'theme-black'} ${showFurigana ? '' : 'furigana-hidden'}`}>
       <nav className="top-nav">
         <div className="brand-wrap">
           <div className="brand-mark">日</div>
@@ -385,8 +426,9 @@ function AppShell() {
         </div>
 
         <button
+          ref={mobileMenuButtonRef}
           type="button"
-          className="mobile-menu-toggle"
+          className="mobile-menu-toggle flex md:hidden"
           aria-label="Toggle navigation menu"
           aria-expanded={isMenuOpen}
           onClick={() => {
@@ -394,18 +436,113 @@ function AppShell() {
             setIsMenuOpen((prev) => !prev);
           }}
         >
-          {isMenuOpen ? <X size={18} /> : <Menu size={18} />}
+          <Menu size={18} />
         </button>
 
-        <div className={`nav-panel ${isMenuOpen ? 'is-open' : ''}`}>
+        {appShellRef.current && createPortal(
+          <div className={`mobile-drawer-layer${isMenuOpen ? ' is-open' : ''}`} aria-hidden={!isMenuOpen} inert={!isMenuOpen}>
+            <button
+              type="button"
+              className="mobile-drawer-backdrop"
+              aria-label="Close navigation menu"
+              onClick={closeMobileMenu}
+            />
+            <aside className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+              <div className="mobile-drawer-main">
+                <header className="mobile-drawer-header">
+                  <div className="brand-wrap">
+                    <div className="brand-mark">日</div>
+                    <div>
+                      <h2 className="brand-title">Nihongo Master</h2>
+                      <p className="brand-subtitle">日本語学習アプリ</p>
+                    </div>
+                  </div>
+                  <button type="button" className="mobile-drawer-close" aria-label="Close navigation menu" onClick={closeMobileMenu}>
+                    <X size={20} />
+                  </button>
+                </header>
+
+                <nav className="mobile-drawer-links" aria-label="Main navigation">
+                  {navigationTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        navigateToTab(tab.id);
+                        closeMobileMenu();
+                      }}
+                      className={`mobile-drawer-link ${activeTab === tab.id ? 'active' : ''}`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+
+              <div className="mobile-drawer-utilities">
+                <div className="mobile-drawer-utility-row">
+                  <div className="theme-switcher" role="group" aria-label="Choose theme">
+                    <button
+                      type="button"
+                      className={themeMode === 'black' ? 'is-active' : ''}
+                      onClick={() => setThemeMode('black')}
+                      aria-label="Use dark theme"
+                      aria-pressed={themeMode === 'black'}
+                      title="Dark theme"
+                    >
+                      <Moon size={17} />
+                    </button>
+                    <button
+                      type="button"
+                      className={themeMode === 'light' ? 'is-active' : ''}
+                      onClick={() => setThemeMode('light')}
+                      aria-label="Use light theme"
+                      aria-pressed={themeMode === 'light'}
+                      title="Light theme"
+                    >
+                      <Sun size={17} />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className={`furigana-toggle ${showFurigana ? 'is-active' : ''}`}
+                    onClick={() => setShowFurigana((visible) => !visible)}
+                    aria-pressed={showFurigana}
+                    aria-label={showFurigana ? 'Hide furigana' : 'Show furigana'}
+                  >
+                    {showFurigana ? <Eye size={17} /> : <EyeOff size={17} />}
+                    <span>Furigana</span>
+                  </button>
+                </div>
+
+                {currentUserEmail && (
+                  <div className="mobile-drawer-profile">
+                    <div className="mobile-drawer-profile-identity">
+                      <span className="profile-avatar" aria-hidden="true">{displayName.charAt(0).toLocaleUpperCase()}</span>
+                      <span className="mobile-drawer-profile-copy">
+                        <strong>{displayName}</strong>
+                        <span>{currentUserEmail}</span>
+                      </span>
+                    </div>
+                    {isAdminUser && (
+                      <button type="button" onClick={() => { closeMobileMenu(); navigate('/admin/dashboard', { replace: true }); }}>
+                        Admin Dashboard
+                      </button>
+                    )}
+                    <button type="button" onClick={() => void handleLogout()}>
+                      <LogOut size={15} /> Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            </aside>
+          </div>,
+          appShellRef.current,
+        )}
+
+        <div className="nav-panel desktop-nav hidden md:flex">
           <div className="tab-list">
-            {[
-              { id: 'dashboard', label: 'Dashboard' },
-              { id: 'flashcards', label: 'Flashcards' },
-              { id: 'bunpou', label: 'Bunpou' },
-              { id: 'quiz', label: 'Quiz' },
-              { id: 'databank', label: 'Data Bank' },
-            ].map((tab) => {
+            {navigationTabs.map((tab) => {
               const isActive = activeTab === tab.id;
               return (
                 <button
@@ -643,6 +780,7 @@ function AppShell() {
           <FlashcardsPage
             items={items}
             isDark={themeMode === 'black'}
+            isOverlayOpen={isMenuOpen || isProfileMenuOpen}
           />
         )}
 

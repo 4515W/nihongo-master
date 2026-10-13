@@ -9,9 +9,10 @@ import { speakJapanese } from '../lib/audio';
 interface Props {
   items: StudyItem[];
   isDark: boolean;
+  isOverlayOpen: boolean;
 }
 
-export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
+export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }) => {
   const [selectedType, setSelectedType] = useState<'ALL' | 'kanji' | 'kotoba'>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<'ALL' | 'new' | 'learning' | 'mastered'>('ALL');
@@ -73,7 +74,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
       setLoadingRelatedKotoba(true);
       const { data, error } = await supabase
         .from('kotoba')
-        .select('*')
+        .select('id, word, reading, meaning, jlpt_level')
         .like('word', `%${currentItem.japanese}%`)
         .limit(5);
 
@@ -160,7 +161,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
   const handleSpeak = speakJapanese;
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 sm:px-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 pb-28 sm:px-6 md:pb-0">
       {/* Top Filter Bar */}
       <div className={`border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${styles.filterBar}`}>
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -221,13 +222,13 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
       {/* Main Flashcards Grid Container */}
       {currentItem ? (
         <div className="flex flex-col items-center gap-6 w-full">
-          <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:gap-4">
+          <div className="grid w-full grid-cols-1 items-center gap-2 sm:gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
             <button
               type="button"
               onClick={() => handleNavigate(-1)}
               aria-label="Previous flashcard"
               title="Previous"
-              className={`flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 ${styles.dropdown}`}
+              className={`hidden h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 md:flex ${styles.dropdown}`}
             >
               <ChevronLeft size={20} />
             </button>
@@ -235,7 +236,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
             <div className={`mx-auto grid w-full min-w-0 gap-6 transition-all duration-300 ${isKanji || isKotoba ? 'max-w-7xl grid-cols-1 md:grid-cols-12' : 'max-w-3xl grid-cols-1'}`}>
             
             {/* Primary 3D Flashcard Box */}
-            <div className={`w-full h-96 md:h-[400px] perspective-1000 select-none ${isKanji || isKotoba ? 'md:col-span-7' : ''}`}>
+            <div className={`w-full h-[min(24rem,calc(100dvh-14rem))] min-h-64 sm:h-96 md:h-[400px] perspective-1000 select-none ${isKanji || isKotoba ? 'md:col-span-7' : ''}`}>
               <div
                 className={`relative w-full h-full duration-500 transform-style-3d cursor-pointer ${isFlipped ? 'rotate-y-180' : ''}`}
                 onClick={() => setIsFlipped(!isFlipped)}
@@ -266,7 +267,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
                   </div>
 
                   <div className="text-center my-auto space-y-3">
-                    <h2 className={`text-7xl md:text-8xl font-black mb-2 tracking-tight ${styles.textMain}`}>
+                    <h2 className={`text-5xl sm:text-7xl md:text-8xl font-black mb-2 tracking-tight ${styles.textMain}`}>
                       {isKotoba
                         ? <FuriganaText text={currentItem.japanese} reading={currentItem.reading} />
                         : currentItem.japanese}
@@ -304,7 +305,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
                   <div className="my-auto max-h-[250px] w-full space-y-3 overflow-y-auto text-center">
                     <p className={`text-xs font-semibold uppercase tracking-wide ${styles.textMuted}`}>Readings</p>
                     <p className="text-xl font-bold text-rose-500"><FuriganaText text={currentItem.reading} /></p>
-                    <h3 className={`text-4xl font-extrabold ${styles.textMain}`}>{currentItem.meaning}</h3>
+                    <h3 className={`mx-auto max-w-full break-words overflow-hidden text-ellipsis line-clamp-3 text-xl sm:text-2xl md:text-3xl font-extrabold ${styles.textMain}`}>{currentItem.meaning}</h3>
 
                     {currentItem.structure && (
                       <p className="text-xs bg-amber-500/10 text-amber-500 px-3.5 py-1.5 rounded-xl inline-block font-mono border border-amber-500/20">
@@ -412,7 +413,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
             onClick={() => handleNavigate(1)}
             aria-label="Next flashcard"
             title="Next"
-            className={`flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 ${styles.dropdown}`}
+            className={`hidden h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border sm:h-12 sm:w-12 md:flex ${styles.dropdown}`}
           >
             <ChevronRight size={20} />
           </button>
@@ -443,6 +444,28 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark }) => {
               )}
             </div>
           </section>
+        )}
+
+        {!isOverlayOpen && (
+          <div
+            className={`mobile-flashcard-controls fixed bottom-4 left-4 right-4 z-30 flex gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur-md md:hidden ${isDark ? 'border-slate-800/80 bg-slate-900/90 text-slate-100' : 'border-slate-200/80 bg-white/90 text-slate-900'}`}
+            style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom))' }}
+          >
+          <button
+            type="button"
+            onClick={() => handleNavigate(-1)}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-rose-500 py-3 font-medium text-white"
+          >
+            <ChevronLeft size={18} /> Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => handleNavigate(1)}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-rose-500 py-3 font-medium text-white"
+          >
+            Next <ChevronRight size={18} />
+          </button>
+          </div>
         )}
 
         </div>

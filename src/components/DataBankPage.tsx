@@ -8,7 +8,7 @@ interface DataBankPageProps {
   isDark: boolean;
 }
 
-export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) => {
+export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark }) => {
   const [selectedType, setSelectedType] = useState<'ALL' | StudyItem['type']>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<'ALL' | StudyItem['jlptLevel']>('ALL');
   const [selectedItem, setSelectedItem] = useState<StudyItem | null>(null);
@@ -124,7 +124,7 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
             <option value="N1">N1</option>
           </select>
 
-          <label className="ml-auto flex items-center gap-2 text-sm text-slate-500">
+          <label className="ml-auto flex items-center gap-2 text-sm text-[var(--text-muted)]">
             Rows per page
             <select className="filter-select" value={rowsPerPage} onChange={(event) => { setRowsPerPage(Number(event.target.value)); setCurrentPage(1); }}>
               {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
@@ -157,12 +157,12 @@ export const DataBankPage: FC<DataBankPageProps> = ({ items, isDark: _isDark }) 
           ))}
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--text-muted)]">
           <p>Showing {filteredItems.length ? firstIndex + 1 : 0} to {Math.min(firstIndex + rowsPerPage, filteredItems.length)} of {filteredItems.length} items</p>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="filter-select min-w-0" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1}>Previous</button>
             {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
-              <button key={page} type="button" className={`min-h-10 min-w-10 rounded-lg border px-3 font-bold ${safePage === page ? 'border-rose-500 bg-rose-500/10 text-rose-500' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`} onClick={() => setCurrentPage(page)} aria-current={safePage === page ? 'page' : undefined}>
+              <button key={page} type="button" className={`min-h-10 min-w-10 rounded-lg border px-3 font-bold ${safePage === page ? 'border-rose-500 bg-rose-500/10 text-rose-500' : isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`} onClick={() => setCurrentPage(page)} aria-current={safePage === page ? 'page' : undefined}>
                 {page}
               </button>
             ))}

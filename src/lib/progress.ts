@@ -9,7 +9,7 @@ export interface QuizProgressResult {
 
 export async function recordQuizAttempt(item: StudyItem, isCorrect: boolean, selectedAnswer: string, correctAnswer: string, questionType: 'reading' | 'meaning'): Promise<QuizProgressResult | null> {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user?.id) return null;
 
   const { error: historyError } = await supabase
     .from('user_quiz_history')

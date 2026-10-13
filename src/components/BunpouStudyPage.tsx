@@ -81,26 +81,26 @@ export function BunpouStudyPage({ items, onTestThisPoint }: BunpouStudyPageProps
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-2xl font-bold text-[var(--heading)]">{selectedItem.japanese}</h2>
-                  <p className="mt-1 text-sm text-[var(--text-muted)]">{selectedItem.structure}</p>
+                  <p className="bunpou-detail-subtext mt-1 text-sm">{selectedItem.structure}</p>
                 </div>
                 <button type="button" className="theme-switcher-button" aria-label="Play grammar pronunciation" title="Play pronunciation" onClick={() => speakJapanese(`${selectedItem.japanese}。${selectedItem.structure ?? ''}`)}><Volume2 size={18} /></button>
               </div>
 
-              <div className="detail-box">
-                <label>Meaning</label>
-                <p>{selectedItem.meaning}</p>
+              <div className="detail-box bunpou-detail-box">
+                <label className="bunpou-detail-label">Meaning</label>
+                <p className="bunpou-detail-main">{selectedItem.meaning}</p>
               </div>
 
-              <div className="detail-box">
-                <label>Conjugation Structure</label>
+              <div className="detail-box bunpou-detail-box">
+                <label className="bunpou-detail-label">Conjugation Structure</label>
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-left text-sm">
-                    <thead><tr><th className="py-2 pr-4">Form</th><th className="py-2">Connection</th></tr></thead>
+                    <thead className="bunpou-table-heading"><tr><th className="py-2 pr-4">Form</th><th className="py-2">Connection</th></tr></thead>
                     <tbody>
                       {connectionTypes.map(({ key, label }) => (
-                        <tr key={key} className="border-t border-[var(--line)]">
-                          <th className="py-2 pr-4 font-semibold">{label}</th>
-                          <td className="py-2">{selectedItem.conjugationRules?.[key] || 'Not specified'}</td>
+                        <tr key={key} className="bunpou-table-row border-t">
+                          <th className="bunpou-table-content py-2 pr-4 font-semibold">{label}</th>
+                          <td className="bunpou-table-content py-2">{selectedItem.conjugationRules?.[key] || 'Not specified'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -108,18 +108,18 @@ export function BunpouStudyPage({ items, onTestThisPoint }: BunpouStudyPageProps
                 </div>
               </div>
 
-              <div className="detail-box">
-                <label>Nuance & Usage</label>
-                <p>{selectedItem.nuance || selectedItem.meaning}</p>
+              <div className="detail-box bunpou-detail-box">
+                <label className="bunpou-detail-label">Nuance & Usage</label>
+                <p className="bunpou-detail-main">{selectedItem.nuance || selectedItem.meaning}</p>
               </div>
 
-              <div className="detail-box">
-                <label>Example Sentence</label>
+              <div className="detail-box bunpou-detail-box">
+                <label className="bunpou-detail-label">Example Sentence</label>
                 <div className="flex items-start justify-between gap-3">
-                  <p><FuriganaText text={selectedItem.exampleJp || selectedItem.japanese} /></p>
+                  <p className="bunpou-detail-main"><FuriganaText text={selectedItem.exampleJp || selectedItem.japanese} /></p>
                   <button type="button" className="theme-switcher-button" aria-label="Play example sentence" title="Play example sentence" onClick={() => speakJapanese(selectedItem.exampleJp || selectedItem.japanese)}><Volume2 size={16} /></button>
                 </div>
-                {selectedItem.exampleMeaning && <small>{selectedItem.exampleMeaning}</small>}
+                {selectedItem.exampleMeaning && <small className="bunpou-detail-subtext">{selectedItem.exampleMeaning}</small>}
               </div>
 
               <button type="button" className="quiz-start-button w-full" onClick={() => onTestThisPoint(selectedItem)}>
