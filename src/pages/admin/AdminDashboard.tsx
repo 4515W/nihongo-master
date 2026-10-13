@@ -135,7 +135,7 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
 
   const filteredRows = useMemo(() => {
     const query = debouncedSearch;
-    const matchingRows = rows.filter((row) => {
+    const matchingRows = rows.filter((row: EntityRow) => {
       const values = row as unknown as Record<string, unknown>;
       const matchesSearch = !query || searchColumns[kind].some((column) =>
         String(values[column] ?? '').toLocaleLowerCase().includes(query),
@@ -267,7 +267,7 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
             <tbody>
               {pageRows.length === 0 ? (
                 <tr><td className="px-4 py-10 text-center text-slate-400" colSpan={columns.length + 1}>No records found.</td></tr>
-              ) : pageRows.map((row) => {
+              ) : pageRows.map((row: EntityRow) => {
                 const values = row as unknown as Record<string, unknown>;
                 const id = String(values.id);
                 return (
@@ -591,8 +591,8 @@ function AdminDashboard() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const parsedRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      const normalizedRows = parsedRows.map((row) => normalizeImportedRow(excelTable, row as Record<string, unknown>));
+      const parsedRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      const normalizedRows = parsedRows.map((row: Record<string, unknown>) => normalizeImportedRow(excelTable, row));
       setExcelRows(normalizedRows);
       setSelectedFileName(file.name);
       setMessage('File parsed successfully. Review the data and upload when ready.');
@@ -814,7 +814,7 @@ function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {excelRows.slice(0, 10).map((row, index) => (
+                      {excelRows.slice(0, 10).map((row: Record<string, unknown>, index) => (
                         <tr key={`${index}-${Object.values(row).join('-')}`} className="border-t border-slate-800">
                           {Object.values(row).map((value, valueIndex) => (
                             <td key={`${index}-${valueIndex}`} className="px-3 py-2 align-top">

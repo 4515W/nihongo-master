@@ -81,7 +81,7 @@ export function BunpouPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row) => ({
+      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
         title: String(row.title ?? ''),
         structure: String(row.structure ?? ''),
         meaning: String(row.meaning ?? ''),

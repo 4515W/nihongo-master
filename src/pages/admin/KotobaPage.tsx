@@ -81,7 +81,7 @@ export function KotobaPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row) => ({
+      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
         word: String(row.word ?? ''),
         reading: String(row.reading ?? ''),
         meaning: String(row.meaning ?? ''),

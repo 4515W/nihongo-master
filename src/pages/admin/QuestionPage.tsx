@@ -86,7 +86,7 @@ export function QuestionPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row) => ({
+      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
         exam_type: String(row.exam_type ?? 'JLPT_N5'),
         section: String(row.section ?? 'goi'),
         question_text: String(row.question_text ?? ''),

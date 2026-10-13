@@ -83,7 +83,7 @@ export function KanjiPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row) => ({
+      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
         kanji: String(row.kanji ?? ''),
         onyomi: String(row.onyomi ?? ''),
         kunyomi: String(row.kunyomi ?? ''),
