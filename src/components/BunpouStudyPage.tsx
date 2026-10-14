@@ -4,6 +4,7 @@ import type { StudyItem } from '../types';
 import { FuriganaText } from './FuriganaText';
 import { speakJapanese } from '../lib/audio';
 import { useBackDismiss } from '../lib/useBackDismiss';
+import { normalizeStudyItemType } from '../lib/studyItems';
 
 interface BunpouStudyPageProps {
   items: StudyItem[];
@@ -20,7 +21,7 @@ const connectionTypes = [
 export function BunpouStudyPage({ items, onTestThisPoint }: BunpouStudyPageProps) {
   const [selectedItem, setSelectedItem] = useState<StudyItem | null>(null);
   useBackDismiss(selectedItem !== null, () => setSelectedItem(null));
-  const grammarItems = items.filter((item) => item.type === 'bunpou');
+  const grammarItems = items.filter((item) => normalizeStudyItemType(item.type) === 'bunpou');
   const masteredCount = grammarItems.filter((item) => item.isMastered).length;
 
   return (

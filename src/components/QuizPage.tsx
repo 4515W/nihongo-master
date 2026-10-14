@@ -132,6 +132,7 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
         onQuizAttempt?.();
       }
     } catch (error) {
+      console.error('Quiz Save Error:', error);
       setProgressError(error instanceof Error ? error.message : 'Could not save quiz progress.');
     } finally {
       setIsSavingAttempt(false);
@@ -139,6 +140,7 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
   };
 
   const handleNextQuestion = () => {
+    setProgressError('');
     if (currentQuestionIndex < quizItems.length - 1) {
       setCurrentQuestionIndex((prev) => prev + 1);
       setSelectedAnswer(null);

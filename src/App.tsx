@@ -105,14 +105,15 @@ const fetchMasteredProgress = async (userId: string) => {
 
 const fetchStudyData = async (): Promise<StudyItem[]> => {
   const [kanjiRes, kotobaRes, bunpouRes] = await Promise.all([
-    supabase.from('kanji').select('id, kanji, onyomi, kunyomi, meaning, jlpt_level, created_at'),
-    supabase.from('kotoba').select('id, word, reading, meaning, jlpt_level, example_sentence, example_meaning, related_words, created_at'),
-    supabase.from('bunpou').select('id, title, structure, meaning, jlpt_level, example_sentence, nuance, conjugation_rules, created_at'),
+    supabase.from('kanji').select('*'),
+    supabase.from('kotoba').select('*'),
+    supabase.from('bunpou').select('*'),
   ]);
 
-  const kanjiRows = (kanjiRes.data ?? []) as Record<string, any>[];
-  const kotobaRows = (kotobaRes.data ?? []) as Record<string, any>[];
-  const bunpouRows = (bunpouRes.data ?? []) as Record<string, any>[];
+  const kanjiRows = (kanjiRes.error ? [] : kanjiRes.data ?? []) as Record<string, any>[];
+  const kotobaRows = (kotobaRes.error ? [] : kotobaRes.data ?? []) as Record<string, any>[];
+  const bunpouRows = (bunpouRes.error ? [] : bunpouRes.data ?? []) as Record<string, any>[];
+  console.log('Fetched counts:', { kanji: kanjiRows.length, kotoba: kotobaRows.length, bunpou: bunpouRows.length });
   const { data: { user } } = await supabase.auth.getUser();
   let progressRows: UserItemProgress[] = [];
   if (user?.id) {
@@ -187,7 +188,7 @@ const fetchDashboardStats = async (): Promise<DashboardStats> => {
     try {
       const { data, error } = await supabase
         .from('user_quiz_history')
-        .select('item_type, item_id, is_correct')
+        .select('*')
         .eq('user_id', user.id);
 
       return error ? null : { data: data ?? [] };
@@ -361,9 +362,9 @@ function AppShell() {
   const kotobaItems = items.filter((i) => i.type === 'kotoba');
   const bunpouItems = items.filter((i) => i.type === 'bunpou');
 
-  const kanjiMastered = kanjiItems.filter((i) => i.isMastered).length;
-  const kotobaMastered = kotobaItems.filter((i) => i.isMastered).length;
-  const bunpouMastered = bunpouItems.filter((i) => i.isMastered).length;
+  const masteredKanji = dashboardStats.masteredItemIdsByType?.kanji.length ?? kanjiItems.filter((item) => item.isMastered).length;
+  const masteredKotoba = dashboardStats.masteredItemIdsByType?.kotoba.length ?? kotobaItems.filter((item) => item.isMastered).length;
+  const masteredBunpou = dashboardStats.masteredItemIdsByType?.bunpou.length ?? bunpouItems.filter((item) => item.isMastered).length;
 
   const totalMastered = items.filter((i) => i.isMastered).length;
   const displayedTotalMastered = dashboardStats.masteredCount ?? totalMastered;
@@ -401,6 +402,47 @@ function AppShell() {
           : item,
       ),
     );
+  };
+
+  const handleMarkAsMastered = async (studyItem: StudyItem): Promise<boolean> => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) return false;
+
+      const { error } = await supabase.from('user_item_progress').upsert({
+        user_id: user.id,
+        item_type: studyItem.type,
+        item_id: studyItem.id,
+        streak_count: studyItem.masteryStreak ?? 0,
+        is_mastered: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,item_type,item_id' });
+
+      if (error) {
+        console.error('Supabase Error Details:', error);
+        return false;
+      }
+
+      setItems((currentItems) => currentItems.map((item) => (
+        item.id === studyItem.id && item.type === studyItem.type
+          ? { ...item, isMastered: true, masteryStatus: 'mastered' }
+          : item
+      )));
+      setDashboardStats((currentStats) => {
+        const currentIds = currentStats.masteredItemIdsByType ?? { kanji: [], kotoba: [], bunpou: [] };
+        const typeIds = currentIds[studyItem.type].includes(studyItem.id)
+          ? currentIds[studyItem.type]
+          : [...currentIds[studyItem.type], studyItem.id];
+        const masteredItemIdsByType = { ...currentIds, [studyItem.type]: typeIds };
+        const masteredCount = Object.values(masteredItemIdsByType).reduce((total, ids) => total + ids.length, 0);
+        return { ...currentStats, masteredItemIdsByType, masteredCount };
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Supabase Error Details:', error);
+      return false;
+    }
   };
 
   const handleLogout = async () => {
@@ -665,7 +707,7 @@ function AppShell() {
                 <div>
                   <p className="stat-label">Total Kanji</p>
                   <h3>{kanjiItems.length}</h3>
-                  <p className="meta-positive">{kanjiMastered} Mastered</p>
+                  <p className="meta-positive">{masteredKanji} Mastered</p>
                 </div>
                 <div className="stat-icon rose">漢</div>
               </div>
@@ -674,7 +716,7 @@ function AppShell() {
                 <div>
                   <p className="stat-label">Total Kotoba</p>
                   <h3>{kotobaItems.length}</h3>
-                  <p className="meta-positive">{kotobaMastered} Mastered</p>
+                  <p className="meta-positive">{masteredKotoba} Mastered</p>
                 </div>
                 <div className="stat-icon blue">語</div>
               </div>
@@ -683,7 +725,7 @@ function AppShell() {
                 <div>
                   <p className="stat-label">Total Bunpou</p>
                   <h3>{bunpouItems.length}</h3>
-                  <p className="meta-positive">{bunpouMastered} Mastered</p>
+                  <p className="meta-positive">{masteredBunpou} Mastered</p>
                 </div>
                 <div className="stat-icon purple">文</div>
               </div>
@@ -781,6 +823,7 @@ function AppShell() {
             items={items}
             isDark={themeMode === 'black'}
             isOverlayOpen={isMenuOpen || isProfileMenuOpen}
+            onMarkAsMastered={handleMarkAsMastered}
           />
         )}
 

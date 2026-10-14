@@ -5,14 +5,16 @@ import { supabase } from '../lib/supabase';
 import { RotateCw, Volume2, PenTool, RefreshCw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { FuriganaText } from './FuriganaText';
 import { speakJapanese } from '../lib/audio';
+import { normalizeStudyItemType } from '../lib/studyItems';
 
 interface Props {
   items: StudyItem[];
   isDark: boolean;
   isOverlayOpen: boolean;
+  onMarkAsMastered: (item: StudyItem) => Promise<boolean>;
 }
 
-export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }) => {
+export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, onMarkAsMastered }) => {
   const [selectedType, setSelectedType] = useState<'ALL' | 'kanji' | 'kotoba'>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<'ALL' | 'new' | 'learning' | 'mastered'>('ALL');
@@ -23,6 +25,8 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
   const [loadingStroke, setLoadingStroke] = useState(false);
   const [relatedKotoba, setRelatedKotoba] = useState<KotobaItem[]>([]);
   const [loadingRelatedKotoba, setLoadingRelatedKotoba] = useState(false);
+  const [isMarkingMastered, setIsMarkingMastered] = useState(false);
+  const [masterySaveError, setMasterySaveError] = useState('');
 
   const styles = {
     filterBar: isDark ? 'bg-[#161b22]/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
@@ -38,8 +42,10 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
     badgeType: isDark ? 'bg-slate-800/80 text-slate-300' : 'bg-slate-100 text-slate-700',
   };
 
-  const filteredItems = items.filter((item) => item.type === 'kanji' || item.type === 'kotoba').filter((item) => {
-    const matchType = selectedType === 'ALL' || item.type === selectedType;
+  const filteredItems = items.filter((item) => {
+    const itemType = normalizeStudyItemType(item.type);
+    const matchFlashcardType = itemType === 'kanji' || itemType === 'kotoba';
+    const matchType = selectedType === 'ALL' || itemType === normalizeStudyItemType(selectedType);
     const matchLevel = selectedLevel === 'ALL' || item.jlptLevel === selectedLevel;
     const matchStatus =
       selectedStatus === 'ALL'
@@ -52,19 +58,20 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
     const query = search.trim().toLocaleLowerCase();
     const matchSearch = !query || [item.japanese, item.reading, item.onyomi, item.kunyomi, item.meaning]
       .some((value) => value?.toLocaleLowerCase().includes(query));
-    return matchType && matchLevel && matchStatus && matchSearch;
+    return matchFlashcardType && matchType && matchLevel && matchStatus && matchSearch;
   });
 
   const currentItem = filteredItems[currentIndex];
-  const isKanji = currentItem?.type === 'kanji';
-  const isKotoba = currentItem?.type === 'kotoba';
+  const currentItemType = normalizeStudyItemType(currentItem?.type);
+  const isKanji = currentItemType === 'kanji';
+  const isKotoba = currentItemType === 'kotoba';
   const featuredKotoba = relatedKotoba[0];
 
   useEffect(() => {
     let isMounted = true;
 
     const fetchRelatedKotoba = async () => {
-      if (!currentItem || currentItem.type !== 'kanji') {
+      if (!currentItem || normalizeStudyItemType(currentItem.type) !== 'kanji') {
         setRelatedKotoba([]);
         setLoadingRelatedKotoba(false);
         return;
@@ -74,7 +81,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
       setLoadingRelatedKotoba(true);
       const { data, error } = await supabase
         .from('kotoba')
-        .select('id, word, reading, meaning, jlpt_level')
+        .select('*')
         .like('word', `%${currentItem.japanese}%`)
         .limit(5);
 
@@ -90,7 +97,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
   }, [currentItem?.id, currentItem?.japanese, currentItem?.type]);
 
   useEffect(() => {
-    if (!currentItem || currentItem.type !== 'kanji') {
+    if (!currentItem || normalizeStudyItemType(currentItem.type) !== 'kanji') {
       setStrokeSvg(null);
       return;
     }
@@ -137,7 +144,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
         e.preventDefault();
         setIsFlipped(false);
         setCurrentIndex((index) => (index - 1 + filteredItems.length) % filteredItems.length);
-      } else if (e.code === 'KeyA' && currentItem?.type === 'kotoba') {
+      } else if (e.code === 'KeyA' && isKotoba) {
         e.preventDefault();
         speakJapanese(`${currentItem.japanese}。${currentItem.reading ?? ''}。${currentItem.exampleJp ?? ''}`);
       }
@@ -149,6 +156,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
   useEffect(() => {
     setIsFlipped(false);
     setStrokeSvg(null);
+    setMasterySaveError('');
   }, [currentIndex, selectedType, selectedLevel, selectedStatus]);
 
   const handleNavigate = (direction: -1 | 1) => {
@@ -159,6 +167,22 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
   };
 
   const handleSpeak = speakJapanese;
+
+  const handleMarkCurrentAsMastered = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!currentItem || currentItem.isMastered || isMarkingMastered) return;
+
+    setIsMarkingMastered(true);
+    setMasterySaveError('');
+    try {
+      const saved = await onMarkAsMastered(currentItem);
+      if (!saved) setMasterySaveError('Could not save mastery. Please try again.');
+    } catch {
+      setMasterySaveError('Could not save mastery. Please try again.');
+    } finally {
+      setIsMarkingMastered(false);
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 pb-28 sm:px-6 md:pb-0">
@@ -281,6 +305,15 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen }
                   </div>
 
                   <div className="text-center">
+                    <button
+                      type="button"
+                      className="quiz-button primary mx-auto mb-3 w-auto"
+                      disabled={currentItem.isMastered || isMarkingMastered}
+                      onClick={(event) => void handleMarkCurrentAsMastered(event)}
+                    >
+                      {currentItem.isMastered ? 'Mastered' : isMarkingMastered ? 'Saving...' : 'Mark as Mastered'}
+                    </button>
+                    {masterySaveError && <p className="mb-2 text-xs text-rose-500" role="alert">{masterySaveError}</p>}
                     <span className={`text-xs font-semibold flex items-center justify-center gap-1.5 ${styles.textMuted}`}>
                       <RotateCw size={13} /> Click or press{' '}
                       <span className={`px-2 py-0.5 rounded-md text-[11px] font-mono ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
