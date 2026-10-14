@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { parseConjugationRules } from '../../lib/grammar';
+import { upsertMasterData } from '../../lib/masterDataImport';
 import type { BunpouItem } from '../../types/database';
 
 const emptyForm = {
@@ -93,23 +94,9 @@ export function BunpouPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
-        title: String(row.title ?? ''),
-        structure: String(row.structure ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        example_sentence: String(row.example_sentence ?? ''),
-        nuance: String(row.nuance ?? ''),
-        conjugation_rules: parseConjugationRules(row.conjugation_rules ?? '{}'),
-      }));
+      const importedCount = await upsertMasterData('bunpou', rowsFromExcel);
 
-      const { error: importError } = await (supabase.from('bunpou') as any).insert(normalized as any[]);
-      if (importError) {
-        setError(importError.message);
-        return;
-      }
-
-      setMessage(`${normalized.length} grammar entries imported successfully.`);
+      setMessage(`${importedCount} grammar entries imported or updated successfully.`);
       setError('');
       event.target.value = '';
       void fetchRows();

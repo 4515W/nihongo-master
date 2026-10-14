@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
+import { upsertMasterData } from '../../lib/masterDataImport';
 import type { KotobaItem } from '../../types/database';
 
 const emptyForm = {
@@ -81,21 +82,9 @@ export function KotobaPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
-        word: String(row.word ?? ''),
-        reading: String(row.reading ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        part_of_speech: String(row.part_of_speech ?? ''),
-      }));
+      const importedCount = await upsertMasterData('kotoba', rowsFromExcel);
 
-      const { error: importError } = await (supabase.from('kotoba') as any).insert(normalized as any[]);
-      if (importError) {
-        setError(importError.message);
-        return;
-      }
-
-      setMessage(`${normalized.length} vocabulary entries imported successfully.`);
+      setMessage(`${importedCount} vocabulary entries imported or updated successfully.`);
       setError('');
       event.target.value = '';
       void fetchRows();
@@ -152,7 +141,7 @@ export function KotobaPage() {
                 <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleExcelImport} />
               </label>
             </div>
-            <p className="text-sm text-slate-400">Use columns: word, reading, meaning, jlpt_level, part_of_speech</p>
+            <p className="text-sm text-slate-400">Use columns: word, reading, meaning, jlpt_level, part_of_speech, example_sentence, example_meaning</p>
           </div>
         </div>
 

@@ -168,9 +168,8 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
     })),
   ];
 
-  const progressByItem = new Map(progressRows.map((progress) => [`${progress.item_type}:${progress.item_id}`, progress]));
   return allRows.map((item) => {
-    const progress = progressByItem.get(`${item.type}:${item.id}`);
+    const progress = progressRows.find((row) => row.item_type === item.type && String(row.item_id) === String(item.id));
     return {
       ...item,
       isMastered: progress?.is_mastered ?? false,
@@ -211,9 +210,13 @@ const fetchDashboardStats = async (): Promise<DashboardStats> => {
   return {
     masteredCount: Object.values(masteredItemIdsByType).reduce((count, itemIds) => count + itemIds.length, 0),
     masteredItemIdsByType,
-    quizAttempts: history.length,
-    quizCorrect: history.filter((entry) => entry.is_correct).length,
-    completedItems: new Set(history.map((entry) => `${entry.item_type}:${entry.item_id}`)).size,
+    quizAttempts: history.reduce((total, entry) => total + (entry.total_questions ?? (entry.item_id ? 1 : 0)), 0),
+    quizCorrect: history.reduce((total, entry) => total + (
+      entry.score !== null && entry.score !== undefined
+        ? Math.round((entry.score * (entry.total_questions ?? 0)) / 100)
+        : entry.is_correct ? 1 : 0
+    ), 0),
+    completedItems: history.reduce((total, entry) => total + (entry.total_questions ?? (entry.item_id ? 1 : 0)), 0),
   };
 };
 
@@ -404,45 +407,25 @@ function AppShell() {
     );
   };
 
-  const handleMarkAsMastered = async (studyItem: StudyItem): Promise<boolean> => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id) return false;
-
-      const { error } = await supabase.from('user_item_progress').upsert({
-        user_id: user.id,
-        item_type: studyItem.type,
-        item_id: studyItem.id,
-        streak_count: studyItem.masteryStreak ?? 0,
-        is_mastered: true,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,item_type,item_id' });
-
-      if (error) {
-        console.error('Supabase Error Details:', error);
-        return false;
-      }
-
-      setItems((currentItems) => currentItems.map((item) => (
-        item.id === studyItem.id && item.type === studyItem.type
-          ? { ...item, isMastered: true, masteryStatus: 'mastered' }
-          : item
-      )));
-      setDashboardStats((currentStats) => {
-        const currentIds = currentStats.masteredItemIdsByType ?? { kanji: [], kotoba: [], bunpou: [] };
-        const typeIds = currentIds[studyItem.type].includes(studyItem.id)
-          ? currentIds[studyItem.type]
-          : [...currentIds[studyItem.type], studyItem.id];
-        const masteredItemIdsByType = { ...currentIds, [studyItem.type]: typeIds };
-        const masteredCount = Object.values(masteredItemIdsByType).reduce((total, ids) => total + ids.length, 0);
-        return { ...currentStats, masteredItemIdsByType, masteredCount };
-      });
-
-      return true;
-    } catch (error) {
-      console.error('Supabase Error Details:', error);
-      return false;
-    }
+  const handleMasteryStateChange = (type: ItemType, id: string, isMastered: boolean, streakCount: number) => {
+    setItems((currentItems) => currentItems.map((item) => (
+      item.id === id && item.type === type
+        ? { ...item, isMastered, masteryStreak: streakCount, masteryStatus: isMastered ? 'mastered' : streakCount ? 'learning' : 'new' }
+        : item
+    )));
+    setDashboardStats((currentStats) => {
+      const currentIds = currentStats.masteredItemIdsByType ?? {
+        kanji: items.filter((item) => item.type === 'kanji' && item.isMastered).map((item) => item.id),
+        kotoba: items.filter((item) => item.type === 'kotoba' && item.isMastered).map((item) => item.id),
+        bunpou: items.filter((item) => item.type === 'bunpou' && item.isMastered).map((item) => item.id),
+      };
+      const typeIds = isMastered
+        ? currentIds[type].includes(String(id)) ? currentIds[type] : [...currentIds[type], String(id)]
+        : currentIds[type].filter((existingId) => String(existingId) !== String(id));
+      const masteredItemIdsByType = { ...currentIds, [type]: typeIds };
+      const masteredCount = Object.values(masteredItemIdsByType).reduce((total, ids) => total + ids.length, 0);
+      return { ...currentStats, masteredItemIdsByType, masteredCount };
+    });
   };
 
   const handleLogout = async () => {
@@ -823,7 +806,7 @@ function AppShell() {
             items={items}
             isDark={themeMode === 'black'}
             isOverlayOpen={isMenuOpen || isProfileMenuOpen}
-            onMarkAsMastered={handleMarkAsMastered}
+            onMasteryChange={handleMasteryStateChange}
           />
         )}
 

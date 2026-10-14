@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
+import { upsertMasterData } from '../../lib/masterDataImport';
 import type { KanjiItem } from '../../types/database';
 
 const emptyForm = {
@@ -11,6 +12,8 @@ const emptyForm = {
   meaning: '',
   jlpt_level: 'N5',
   stroke_count: 1,
+  example_sentence: '',
+  example_meaning: '',
 };
 
 export function KanjiPage() {
@@ -48,6 +51,8 @@ export function KanjiPage() {
       meaning: form.meaning,
       jlpt_level: form.jlpt_level,
       stroke_count: Number(form.stroke_count),
+      example_sentence: form.example_sentence,
+      example_meaning: form.example_meaning,
     };
 
     const { error: insertError } = await (supabase.from('kanji') as any).insert([payload]);
@@ -83,22 +88,9 @@ export function KanjiPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
-      const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
-        kanji: String(row.kanji ?? ''),
-        onyomi: String(row.onyomi ?? ''),
-        kunyomi: String(row.kunyomi ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        stroke_count: Number(row.stroke_count ?? 0),
-      }));
+      const importedCount = await upsertMasterData('kanji', rowsFromExcel);
 
-      const { error: importError } = await (supabase.from('kanji') as any).insert(normalized as any[]);
-      if (importError) {
-        setError(importError.message);
-        return;
-      }
-
-      setMessage(`${normalized.length} kanji imported successfully.`);
+      setMessage(`${importedCount} kanji imported or updated successfully.`);
       setError('');
       event.target.value = '';
       void fetchRows();
@@ -134,6 +126,8 @@ export function KanjiPage() {
               <input value={form.onyomi} onChange={(event) => setForm((current) => ({ ...current, onyomi: event.target.value }))} placeholder="Onyomi" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
               <input value={form.kunyomi} onChange={(event) => setForm((current) => ({ ...current, kunyomi: event.target.value }))} placeholder="Kunyomi" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
               <input value={form.meaning} onChange={(event) => setForm((current) => ({ ...current, meaning: event.target.value }))} placeholder="Meaning" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
+              <input value={form.example_sentence} onChange={(event) => setForm((current) => ({ ...current, example_sentence: event.target.value }))} placeholder="Example Sentence" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
+              <input value={form.example_meaning} onChange={(event) => setForm((current) => ({ ...current, example_meaning: event.target.value }))} placeholder="Example Meaning" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
               <div className="grid gap-4 sm:grid-cols-2">
                 <select value={form.jlpt_level} onChange={(event) => setForm((current) => ({ ...current, jlpt_level: event.target.value }))} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400">
                   <option value="N5">N5</option>
@@ -156,7 +150,7 @@ export function KanjiPage() {
                 <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleExcelImport} />
               </label>
             </div>
-            <p className="text-sm text-slate-400">Use columns: kanji, onyomi, kunyomi, meaning, jlpt_level, stroke_count</p>
+            <p className="text-sm text-slate-400">Use columns: kanji, onyomi, kunyomi, meaning, jlpt_level, stroke_count, example_sentence, example_meaning</p>
           </div>
         </div>
 
@@ -177,13 +171,15 @@ export function KanjiPage() {
                     <th className="px-4 py-3">Meaning</th>
                     <th className="px-4 py-3">JLPT</th>
                     <th className="px-4 py-3">Strokes</th>
+                    <th className="px-4 py-3">Example Sentence</th>
+                    <th className="px-4 py-3">Example Meaning</th>
                     <th className="px-4 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">No kanji found.</td>
+                      <td colSpan={9} className="px-4 py-8 text-center text-slate-400">No kanji found.</td>
                     </tr>
                   ) : (
                     rows.map((item) => (
@@ -194,6 +190,8 @@ export function KanjiPage() {
                         <td className="px-4 py-3">{item.meaning}</td>
                         <td className="px-4 py-3">{item.jlpt_level}</td>
                         <td className="px-4 py-3">{item.stroke_count}</td>
+                        <td className="px-4 py-3">{item.example_sentence || '-'}</td>
+                        <td className="px-4 py-3">{item.example_meaning || '-'}</td>
                         <td className="px-4 py-3 text-right">
                           <button type="button" onClick={() => void handleDelete(item.id)} className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200 hover:bg-rose-500/20">Delete</button>
                         </td>

@@ -20,6 +20,8 @@ export interface KanjiItem extends Record<string, unknown> {
   meaning: string;
   jlpt_level: JLPTLevel;
   stroke_count?: number | null;
+  example_sentence?: string | null;
+  example_meaning?: string | null;
   created_at?: string;
 }
 
@@ -73,12 +75,17 @@ export interface UserItemProgress extends Record<string, unknown> {
 export interface UserQuizHistory extends Record<string, unknown> {
   id: string;
   user_id: string;
-  item_type: StudyItemType;
-  item_id: string;
-  question_type: 'reading' | 'meaning';
-  selected_answer: string;
-  correct_answer: string;
-  is_correct: boolean;
+  quiz_type: string;
+  score: number;
+  total_questions: number;
+  points_earned: number;
+  completed_at: string;
+  item_type?: StudyItemType | null;
+  item_id?: string | null;
+  question_type?: 'reading' | 'meaning' | null;
+  selected_answer?: string | null;
+  correct_answer?: string | null;
+  is_correct?: boolean | null;
   created_at?: string;
 }
 

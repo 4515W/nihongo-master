@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { StudyItem } from '../types';
-import type { KotobaItem } from '../types/database';
+import type { KotobaItem, UserItemProgress } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { RotateCw, Volume2, PenTool, RefreshCw, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { FuriganaText } from './FuriganaText';
@@ -11,10 +11,10 @@ interface Props {
   items: StudyItem[];
   isDark: boolean;
   isOverlayOpen: boolean;
-  onMarkAsMastered: (item: StudyItem) => Promise<boolean>;
+  onMasteryChange: (type: StudyItem['type'], id: string, isMastered: boolean, streakCount: number) => void;
 }
 
-export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, onMarkAsMastered }) => {
+export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, onMasteryChange }) => {
   const [selectedType, setSelectedType] = useState<'ALL' | 'kanji' | 'kotoba'>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<'ALL' | 'new' | 'learning' | 'mastered'>('ALL');
@@ -27,6 +27,57 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
   const [loadingRelatedKotoba, setLoadingRelatedKotoba] = useState(false);
   const [isMarkingMastered, setIsMarkingMastered] = useState(false);
   const [masterySaveError, setMasterySaveError] = useState('');
+  const [currentUserId, setCurrentUserId] = useState('');
+  const [masteredItemKeys, setMasteredItemKeys] = useState<Set<string> | null>(null);
+  const [isProgressLoading, setIsProgressLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchProgress = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) {
+          if (isMounted) {
+            setCurrentUserId('');
+            setMasteredItemKeys(new Set());
+          }
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('user_item_progress')
+          .select('*')
+          .eq('user_id', user.id);
+
+        if (!isMounted) return;
+        setCurrentUserId(user.id);
+        if (error) {
+          console.error('Unable to refresh flashcard progress:', error);
+          setMasteredItemKeys(null);
+          return;
+        }
+
+        const progress = (data ?? []) as UserItemProgress[];
+        setMasteredItemKeys(new Set(
+          progress
+            .filter((row) => row.is_mastered)
+            .map((row) => `${normalizeStudyItemType(row.item_type) ?? row.item_type}:${String(row.item_id)}`),
+        ));
+      } catch (error) {
+        if (!isMounted) return;
+        console.error('Unable to refresh flashcard progress:', error);
+        setMasteredItemKeys(null);
+      } finally {
+        if (isMounted) setIsProgressLoading(false);
+      }
+    };
+
+    void fetchProgress();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const styles = {
     filterBar: isDark ? 'bg-[#161b22]/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
@@ -42,6 +93,9 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
     badgeType: isDark ? 'bg-slate-800/80 text-slate-300' : 'bg-slate-100 text-slate-700',
   };
 
+  const getMasteryKey = (item: StudyItem) => `${normalizeStudyItemType(item.type) ?? item.type}:${String(item.id)}`;
+  const isItemMastered = (item: StudyItem) => masteredItemKeys?.has(getMasteryKey(item)) ?? item.isMastered;
+
   const filteredItems = items.filter((item) => {
     const itemType = normalizeStudyItemType(item.type);
     const matchFlashcardType = itemType === 'kanji' || itemType === 'kotoba';
@@ -51,10 +105,10 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
       selectedStatus === 'ALL'
         ? true
         : selectedStatus === 'mastered'
-        ? item.isMastered
+        ? isItemMastered(item)
         : selectedStatus === 'learning'
-        ? !item.isMastered && Boolean(item.masteryStreak)
-        : !item.isMastered && !item.masteryStreak;
+        ? !isItemMastered(item) && Boolean(item.masteryStreak)
+        : !isItemMastered(item) && !item.masteryStreak;
     const query = search.trim().toLocaleLowerCase();
     const matchSearch = !query || [item.japanese, item.reading, item.onyomi, item.kunyomi, item.meaning]
       .some((value) => value?.toLocaleLowerCase().includes(query));
@@ -65,6 +119,7 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
   const currentItemType = normalizeStudyItemType(currentItem?.type);
   const isKanji = currentItemType === 'kanji';
   const isKotoba = currentItemType === 'kotoba';
+  const currentItemIsMastered = currentItem ? isItemMastered(currentItem) : false;
   const featuredKotoba = relatedKotoba[0];
 
   useEffect(() => {
@@ -170,15 +225,42 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
 
   const handleMarkCurrentAsMastered = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (!currentItem || currentItem.isMastered || isMarkingMastered) return;
+    if (!currentItem || !currentUserId || isProgressLoading || isMarkingMastered) return;
 
     setIsMarkingMastered(true);
     setMasterySaveError('');
+    const isMastered = currentItemIsMastered;
+    const nextIsMastered = !isMastered;
+    const progressKey = getMasteryKey(currentItem);
+    const previousKeys = masteredItemKeys ?? new Set<string>();
+    const nextKeys = new Set(previousKeys);
+    if (nextIsMastered) nextKeys.add(progressKey);
+    else nextKeys.delete(progressKey);
+    setMasteredItemKeys(nextKeys);
+    onMasteryChange(currentItem.type, currentItem.id, nextIsMastered, nextIsMastered ? currentItem.masteryStreak ?? 0 : 0);
+
     try {
-      const saved = await onMarkAsMastered(currentItem);
-      if (!saved) setMasterySaveError('Could not save mastery. Please try again.');
-    } catch {
-      setMasterySaveError('Could not save mastery. Please try again.');
+      const { error } = nextIsMastered
+        ? await supabase.from('user_item_progress').upsert({
+          user_id: currentUserId,
+          item_type: currentItem.type.toLowerCase(),
+          item_id: String(currentItem.id),
+          streak_count: currentItem.masteryStreak ?? 0,
+          is_mastered: true,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,item_type,item_id' })
+        : await supabase.from('user_item_progress')
+          .delete()
+          .eq('user_id', currentUserId)
+          .eq('item_id', String(currentItem.id))
+          .eq('item_type', normalizeStudyItemType(currentItem.type) ?? currentItem.type);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Supabase Error Details:', error);
+      setMasteredItemKeys(previousKeys);
+      onMasteryChange(currentItem.type, currentItem.id, isMastered, currentItem.masteryStreak ?? 0);
+      setMasterySaveError('Could not update mastery. Please try again.');
     } finally {
       setIsMarkingMastered(false);
     }
@@ -286,14 +368,14 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
                       <span className="px-3 py-1 bg-rose-500/10 text-rose-500 text-xs font-black rounded-xl border border-rose-500/20">
                         {currentItem.jlptLevel}
                       </span>
-                      <span className={`mastery-indicator ${currentItem.isMastered ? 'mastered' : currentItem.masteryStreak ? 'learning' : 'new'}`} title={currentItem.isMastered ? 'Mastered' : currentItem.masteryStreak ? `Learning ${currentItem.masteryStreak}/3` : 'New item'} />
+                      <span className={`mastery-indicator ${currentItemIsMastered ? 'mastered' : currentItem.masteryStreak ? 'learning' : 'new'}`} title={currentItemIsMastered ? 'Mastered' : currentItem.masteryStreak ? `Learning ${currentItem.masteryStreak}/3` : 'New item'} />
                     </div>
                   </div>
 
                   <div className="text-center my-auto space-y-3">
                     <h2 className={`text-5xl sm:text-7xl md:text-8xl font-black mb-2 tracking-tight ${styles.textMain}`}>
                       {isKotoba
-                        ? <FuriganaText text={currentItem.japanese} reading={currentItem.reading} />
+                        ? <FuriganaText className="flashcard-word-ruby" text={currentItem.japanese} reading={currentItem.reading} />
                         : currentItem.japanese}
                     </h2>
                     {isKanji ? (
@@ -307,11 +389,11 @@ export const FlashcardsPage: React.FC<Props> = ({ items, isDark, isOverlayOpen, 
                   <div className="text-center">
                     <button
                       type="button"
-                      className="quiz-button primary mx-auto mb-3 w-auto"
-                      disabled={currentItem.isMastered || isMarkingMastered}
+                      className={`quiz-button mx-auto mb-3 w-auto ${currentItemIsMastered ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'primary'} disabled:cursor-wait disabled:opacity-60`}
+                      disabled={isProgressLoading || isMarkingMastered || !currentUserId}
                       onClick={(event) => void handleMarkCurrentAsMastered(event)}
                     >
-                      {currentItem.isMastered ? 'Mastered' : isMarkingMastered ? 'Saving...' : 'Mark as Mastered'}
+                      {isProgressLoading ? 'Loading status...' : isMarkingMastered ? 'Saving...' : currentItemIsMastered ? 'Unmark as Mastered' : 'Mark as Mastered'}
                     </button>
                     {masterySaveError && <p className="mb-2 text-xs text-rose-500" role="alert">{masterySaveError}</p>}
                     <span className={`text-xs font-semibold flex items-center justify-center gap-1.5 ${styles.textMuted}`}>

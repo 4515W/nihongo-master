@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import type { StudyItem } from '../types';
 import { BrainCircuit, Check, X, RotateCcw, Volume2, ArrowLeft } from 'lucide-react';
-import { recordQuizAttempt } from '../lib/progress';
+import { supabase } from '../lib/supabase';
 import { FuriganaText } from './FuriganaText';
 import { speakJapanese } from '../lib/audio';
+
+const quizLevels = ['ALL', 'N5', 'N4', 'N3', 'N2', 'N1'] as const;
+const questionCounts = [5, 10, 15, 20] as const;
 
 interface Props {
   items: StudyItem[];
@@ -44,41 +47,44 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
   const [quizItems, setQuizItems] = useState<StudyItem[]>([]);
   const [questionOptions, setQuestionOptions] = useState<string[][]>([]);
   const [selectedCategory, setSelectedCategory] = useState<StudyItem['type'] | null>(targetedCategory);
+  const [selectedLevel, setSelectedLevel] = useState<'ALL' | StudyItem['jlptLevel']>('ALL');
+  const [questionCount, setQuestionCount] = useState<number>(5);
   const [selectedKanjiQuestionType, setSelectedKanjiQuestionType] = useState<KanjiQuestionType>('meaning');
   const [activeQuestionType, setActiveQuestionType] = useState<KanjiQuestionType>('meaning');
   const [reviewItems, setReviewItems] = useState<QuizReview[]>([]);
   const [masteryPoints, setMasteryPoints] = useState(0);
   const [isSavingAttempt, setIsSavingAttempt] = useState(false);
+  const [hasSubmittedQuiz, setHasSubmittedQuiz] = useState(false);
   const [progressError, setProgressError] = useState('');
 
-  const categoryItems = selectedCategory ? items.filter((item) => item.type === selectedCategory) : [];
-  const quizPool = dailyReviewItems.length ? dailyReviewItems : selectedCategory === 'kanji' && selectedKanjiQuestionType === 'reading'
+  const sourceItems = dailyReviewItems.length ? dailyReviewItems : items;
+  const levelItems = selectedLevel === 'ALL' ? sourceItems : sourceItems.filter((item) => item.jlptLevel === selectedLevel);
+  const categoryItems = selectedCategory ? levelItems.filter((item) => item.type === selectedCategory) : levelItems;
+  const quizPool = selectedCategory === 'kanji' && selectedKanjiQuestionType === 'reading'
     ? categoryItems.filter((item) => getKanjiReading(item))
     : categoryItems;
   const availableReadings = [...new Set(categoryItems.flatMap(getKanjiReadings))];
-  const canStartQuiz = dailyReviewItems.length > 0
-    ? true
-    : Boolean(selectedCategory) && quizPool.length >= 4 && (
-    selectedCategory !== 'kanji' || selectedKanjiQuestionType !== 'reading' || availableReadings.length >= 2
-  );
+  const minimumPoolSize = selectedCategory === 'kanji' && selectedKanjiQuestionType === 'reading' ? 2 : 4;
+  const canStartQuiz = (Boolean(selectedCategory) || dailyReviewItems.length > 0)
+    && quizPool.length >= questionCount
+    && quizPool.length >= minimumPoolSize
+    && (selectedCategory !== 'kanji' || selectedKanjiQuestionType !== 'reading' || availableReadings.length >= 2);
 
   const startQuiz = () => {
-    if ((!selectedCategory && !dailyReviewItems.length) || !canStartQuiz) {
-      return;
-    }
+    if (!canStartQuiz) return;
 
-    const questionType = dailyReviewItems.length ? 'meaning' : selectedCategory === 'kanji' ? selectedKanjiQuestionType : 'meaning';
+    const questionType = selectedCategory === 'kanji' ? selectedKanjiQuestionType : 'meaning';
     const randomized = [...quizPool].sort(() => 0.5 - Math.random());
     const target = targetedItemId ? randomized.find((item) => item.id === targetedItemId && (!targetedItemType || item.type === targetedItemType)) : undefined;
     const shuffled = [
       ...(target ? [target] : []),
       ...randomized.filter((item) => item.id !== target?.id),
-    ].slice(0, 5);
+    ].slice(0, questionCount);
     const generatedOptions = shuffled.map((question) => {
       const correctAnswer = questionType === 'reading' ? getKanjiReading(question) : question.meaning;
       const answerPool = questionType === 'reading'
         ? availableReadings
-        : [...new Set((dailyReviewItems.length ? items : quizPool).map((item) => item.meaning))];
+        : [...new Set(quizPool.map((item) => item.meaning))];
       const wrongOptions = answerPool
         .filter((answer) => answer !== correctAnswer)
         .sort(() => 0.5 - Math.random())
@@ -95,6 +101,7 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
     setIsAnswered(false);
     setReviewItems([]);
     setMasteryPoints(0);
+    setHasSubmittedQuiz(false);
     setProgressError('');
   };
 
@@ -103,19 +110,22 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
   const correctAnswer = currentItem
     ? activeQuestionType === 'reading' ? getKanjiReading(currentItem) : currentItem.meaning
     : '';
+  const selectedCategoryLabel = selectedCategory === 'kanji'
+    ? selectedKanjiQuestionType === 'reading' ? 'Kanji Reading' : 'Kanji Meaning'
+    : selectedCategory === 'kotoba' ? 'Kotoba' : selectedCategory === 'bunpou' ? 'Bunpou' : dailyReviewItems.length ? 'All Review Items' : 'Choose a category';
+  const selectedLevelLabel = selectedLevel === 'ALL' ? 'All JLPT' : `JLPT ${selectedLevel}`;
 
   const getOptionSubtext = (option: string) => {
-    const sourceItems = dailyReviewItems.length ? dailyReviewItems : selectedCategory ? items.filter((item) => item.type === selectedCategory) : [];
     const matchingItem = activeQuestionType === 'reading'
-      ? sourceItems.find((item) => getKanjiReadings(item).includes(option))
-      : sourceItems.find((item) => item.meaning === option);
+      ? categoryItems.find((item) => getKanjiReadings(item).includes(option))
+      : quizPool.find((item) => item.meaning === option);
     if (!matchingItem) return '';
     return activeQuestionType === 'reading'
       ? `${matchingItem.japanese} (${matchingItem.meaning})`
       : `${matchingItem.japanese} (${matchingItem.reading})`;
   };
 
-  const handleSelectAnswer = async (ans: string) => {
+  const handleSelectAnswer = (ans: string) => {
     if (isAnswered || !currentItem) return;
     const isCorrect = ans === correctAnswer;
     setSelectedAnswer(ans);
@@ -123,19 +133,72 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
     if (isCorrect) setScore((prev) => prev + 1);
     setReviewItems((current) => [...current, { item: currentItem, answer: correctAnswer, selectedAnswer: ans, isCorrect }]);
     setProgressError('');
+  };
+
+  const submitQuiz = async () => {
+    if (hasSubmittedQuiz || isSavingAttempt || !quizItems.length) return;
+
+    setHasSubmittedQuiz(true);
     setIsSavingAttempt(true);
+    setProgressError('');
+    const correctReviews = reviewItems.filter((review) => review.isCorrect);
+    const correctCount = correctReviews.length;
+    const totalQuestions = quizItems.length;
+    const calculatedScorePercentage = Math.round((correctCount / totalQuestions) * 100);
+    const pointsEarned = correctCount * 10;
+    const uniqueCorrectItems = [...new Map(
+      correctReviews.map(({ item }) => [`${item.type}:${item.id}`, item]),
+    ).values()];
+    setMasteryPoints(pointsEarned);
+
     try {
-      const progress = await recordQuizAttempt(currentItem, isCorrect, ans, correctAnswer, activeQuestionType);
-      if (progress) {
-        onMasteryUpdate?.(currentItem.type, currentItem.id, progress);
-        if (progress.newlyMastered) setMasteryPoints((points) => points + 1);
-        onQuizAttempt?.();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) throw new Error('Sign in again before saving quiz results.');
+
+      const quizType = dailyReviewItems.length
+        ? 'daily_drill'
+        : selectedCategory === 'kanji'
+          ? `kanji_${activeQuestionType}`
+          : selectedCategory ?? 'review';
+      const [historyResult, progressResult] = await Promise.all([
+        supabase.from('user_quiz_history').insert({
+          user_id: user.id,
+          quiz_type: quizType,
+          score: calculatedScorePercentage,
+          total_questions: totalQuestions,
+          points_earned: pointsEarned,
+          completed_at: new Date().toISOString(),
+        }),
+        uniqueCorrectItems.length
+          ? supabase.from('user_item_progress').upsert(uniqueCorrectItems.map((item) => ({
+            user_id: user.id,
+            item_id: String(item.id),
+            item_type: item.type.toLowerCase(),
+            streak_count: Math.max(3, item.masteryStreak ?? 0),
+            is_mastered: true,
+            updated_at: new Date().toISOString(),
+          })), { onConflict: 'user_id,item_type,item_id' })
+          : Promise.resolve({ error: null }),
+      ]);
+
+      if (!progressResult.error) {
+        for (const item of uniqueCorrectItems) {
+          onMasteryUpdate?.(item.type, item.id, {
+            streakCount: Math.max(3, item.masteryStreak ?? 0),
+            isMastered: true,
+            newlyMastered: !item.isMastered,
+          });
+        }
       }
+      if (!historyResult.error || !progressResult.error) onQuizAttempt?.();
+      if (historyResult.error) throw historyResult.error;
+      if (progressResult.error) throw progressResult.error;
     } catch (error) {
       console.error('Quiz Save Error:', error);
-      setProgressError(error instanceof Error ? error.message : 'Could not save quiz progress.');
+      setProgressError(error instanceof Error ? error.message : 'Could not save quiz results.');
     } finally {
       setIsSavingAttempt(false);
+      setCurrentQuestionIndex(quizItems.length);
     }
   };
 
@@ -146,7 +209,7 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
       setSelectedAnswer(null);
       setIsAnswered(false);
     } else {
-      setCurrentQuestionIndex(quizItems.length);
+      void submitQuiz();
     }
   };
 
@@ -157,60 +220,101 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
           <div className="quiz-icon">
             <BrainCircuit size={32} />
           </div>
-          <h2>Choose a Quiz Category</h2>
-          <p>{dailyReviewItems.length ? `${dailyReviewItems.length} unmastered items selected for review.` : 'Select a study category to start a five-question quiz.'}</p>
-          <div className="quiz-mode-grid">
-            {[
-              { type: 'kanji', label: 'Kanji', symbol: '漢' },
-              { type: 'kotoba', label: 'Kotoba', symbol: '語' },
-              { type: 'bunpou', label: 'Bunpou', symbol: '文' },
-            ].map((category) => {
-              const count = items.filter((item) => item.type === category.type).length;
-              return (
+          <h2>Set Up Your Quiz</h2>
+          <p>{dailyReviewItems.length ? `${dailyReviewItems.length} unmastered items are available for review.` : 'Choose a level, test type, and session length.'}</p>
+
+          <section className="quiz-setup-section" aria-labelledby="quiz-level-heading">
+            <h3 id="quiz-level-heading">1. JLPT Level</h3>
+            <div className="quiz-level-grid" role="group" aria-label="JLPT level">
+              {quizLevels.map((level) => (
                 <button
-                  key={category.type}
+                  key={level}
                   type="button"
-                  className={`quiz-mode-button ${selectedCategory === category.type ? 'selected' : ''}`}
-                  aria-pressed={selectedCategory === category.type}
-                  onClick={() => {
-                    onSelectCategory?.();
-                    setSelectedCategory(category.type as StudyItem['type']);
-                  }}
+                  className={`quiz-choice-button ${selectedLevel === level ? 'selected' : ''}`}
+                  aria-pressed={selectedLevel === level}
+                  onClick={() => setSelectedLevel(level)}
                 >
-                  <span className="text-2xl" aria-hidden="true">{category.symbol}</span>
-                  <span>{category.label}</span>
-                  <span className="quiz-helper">{count} items</span>
-                </button>
-              );
-            })}
-          </div>
-          {selectedCategory && categoryItems.length < 4 && (
-            <p className="quiz-helper">Add at least four {selectedCategory} items to start a quiz.</p>
-          )}
-          {selectedCategory === 'kanji' && (
-            <div className="quiz-type-grid" aria-label="Kanji question type">
-              {[
-                { type: 'reading' as const, label: 'Kanji Reading', detail: 'Choose the Hiragana reading' },
-                { type: 'meaning' as const, label: 'Kanji Meaning', detail: 'Choose the translation' },
-              ].map((questionType) => (
-                <button
-                  key={questionType.type}
-                  type="button"
-                  className={`quiz-mode-button ${selectedKanjiQuestionType === questionType.type ? 'selected' : ''}`}
-                  aria-pressed={selectedKanjiQuestionType === questionType.type}
-                  onClick={() => setSelectedKanjiQuestionType(questionType.type)}
-                >
-                  <span>{questionType.label}</span>
-                  <span className="quiz-helper">{questionType.detail}</span>
+                  {level === 'ALL' ? 'All' : level}
                 </button>
               ))}
             </div>
+          </section>
+
+          <section className="quiz-setup-section" aria-labelledby="quiz-category-heading">
+            <h3 id="quiz-category-heading">2. Quiz Category</h3>
+            <div className="quiz-category-grid" role="group" aria-label="Quiz category">
+              {dailyReviewItems.length > 0 && (
+                <button
+                  type="button"
+                  className={`quiz-mode-button ${selectedCategory === null ? 'selected' : ''}`}
+                  aria-pressed={selectedCategory === null}
+                  onClick={() => {
+                    if (!dailyReviewItems.length) onSelectCategory?.();
+                    setSelectedCategory(null);
+                  }}
+                >
+                  <span className="text-2xl" aria-hidden="true">混</span>
+                  <span>All Review Items</span>
+                </button>
+              )}
+              {[
+                { type: 'kanji' as const, questionType: 'reading' as const, label: 'Kanji Reading', symbol: '漢' },
+                { type: 'kanji' as const, questionType: 'meaning' as const, label: 'Kanji Meaning', symbol: '意' },
+                { type: 'kotoba' as const, label: 'Kotoba', symbol: '語' },
+                { type: 'bunpou' as const, label: 'Bunpou', symbol: '文' },
+              ].map((category) => {
+                const selected = selectedCategory === category.type
+                  && (category.type !== 'kanji' || selectedKanjiQuestionType === category.questionType);
+                return (
+                  <button
+                    key={category.label}
+                    type="button"
+                    className={`quiz-mode-button ${selected ? 'selected' : ''}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      if (!dailyReviewItems.length) onSelectCategory?.();
+                      setSelectedCategory(category.type);
+                      if (category.type === 'kanji') setSelectedKanjiQuestionType(category.questionType);
+                    }}
+                  >
+                    <span className="text-2xl" aria-hidden="true">{category.symbol}</span>
+                    <span>{category.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="quiz-setup-section" aria-labelledby="quiz-count-heading">
+            <h3 id="quiz-count-heading">3. Question Count</h3>
+            <div className="quiz-count-grid" role="group" aria-label="Questions per session">
+              {questionCounts.map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  className={`quiz-choice-button ${questionCount === count ? 'selected' : ''}`}
+                  aria-pressed={questionCount === count}
+                  disabled={Boolean(selectedCategory) && quizPool.length < count}
+                  onClick={() => setQuestionCount(count)}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {selectedCategory && quizPool.length < questionCount && (
+            <p className="quiz-helper">Only {quizPool.length} matching questions are available. Choose a shorter session or broaden the level.</p>
           )}
           {selectedCategory === 'kanji' && selectedKanjiQuestionType === 'reading' && availableReadings.length < 2 && (
             <p className="quiz-helper">Add at least two distinct Kanji readings to use reading mode.</p>
           )}
+
+          <p className="quiz-setup-summary" aria-live="polite">
+            {selectedLevelLabel} <span aria-hidden="true">•</span> {selectedCategoryLabel} <span aria-hidden="true">•</span> {questionCount} Questions
+          </p>
           <button type="button" className="quiz-start-button" onClick={startQuiz} disabled={!canStartQuiz}>
-            {dailyReviewItems.length ? 'Start Daily Review' : `Start ${selectedCategory ? `${selectedCategory} ` : ''}Quiz`}
+            {dailyReviewItems.length ? 'Start Daily Review' : 'Start Quiz'}
           </button>
         </div>
       </div>
@@ -235,6 +339,7 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
             <div><span className="quiz-score">{percentage}%</span><span>{score} / {quizItems.length} correct</span></div>
             <div><strong>{masteryPoints}</strong><span>Mastery points earned</span></div>
           </div>
+          {progressError && <p className="quiz-helper" role="alert">{progressError}</p>}
 
           <section className="quiz-review-list">
             <h3>Question Review</h3>
@@ -325,8 +430,8 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
                 <p>No example sentence available for this item.</p>
               )}
             </div>
-            <button type="button" className="quiz-button primary" onClick={handleNextQuestion}>
-              {currentQuestionIndex < quizItems.length - 1 ? 'Next Question' : 'View Results'}
+            <button type="button" className="quiz-button primary" onClick={handleNextQuestion} disabled={isSavingAttempt}>
+              {isSavingAttempt ? 'Saving Results...' : currentQuestionIndex < quizItems.length - 1 ? 'Next Question' : 'View Results'}
             </button>
           </>
         )}

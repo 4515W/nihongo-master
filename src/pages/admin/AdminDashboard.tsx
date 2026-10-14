@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { parseConjugationRules } from '../../lib/grammar';
+import { normalizeMasterImportRow, upsertMasterData, type MasterDataTable } from '../../lib/masterDataImport';
 import { useBackDismiss } from '../../lib/useBackDismiss';
 import type {
   BunpouItem,
@@ -39,6 +40,8 @@ const defaultKanjiForm = {
   meaning: '',
   jlpt_level: 'N5',
   stroke_count: 1,
+  example_sentence: '',
+  example_meaning: '',
 };
 
 const defaultKotobaForm = {
@@ -71,7 +74,7 @@ const defaultQuestionForm = {
 };
 
 const sampleTemplateHeaders: Record<TableName, string[]> = {
-  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count'],
+  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count', 'example_sentence', 'example_meaning'],
   kotoba: ['word', 'reading', 'meaning', 'jlpt_level', 'part_of_speech', 'example_sentence', 'example_meaning'],
   bunpou: ['title', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'nuance', 'conjugation_rules'],
   questions: ['exam_type', 'section', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation'],
@@ -82,15 +85,18 @@ const tableColumns: Record<TableName, Array<{ key: string; label: string }>> = {
     { key: 'kanji', label: 'Kanji' }, { key: 'onyomi', label: 'Onyomi' },
     { key: 'kunyomi', label: 'Kunyomi' }, { key: 'meaning', label: 'Meaning' },
     { key: 'jlpt_level', label: 'JLPT' }, { key: 'stroke_count', label: 'Strokes' },
+    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'example_meaning', label: 'Example Meaning' },
   ],
   kotoba: [
     { key: 'word', label: 'Word' }, { key: 'reading', label: 'Reading' },
     { key: 'meaning', label: 'Meaning' }, { key: 'jlpt_level', label: 'JLPT' },
-    { key: 'example_sentence', label: 'Example' },
+    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'example_meaning', label: 'Example Meaning' },
   ],
   bunpou: [
     { key: 'title', label: 'Grammar' }, { key: 'structure', label: 'Structure' },
     { key: 'meaning', label: 'Meaning' }, { key: 'jlpt_level', label: 'JLPT' },
+    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'nuance', label: 'Nuance' },
+    { key: 'conjugation_rules', label: 'Conjugation Rules' },
   ],
   questions: [
     { key: 'question_text', label: 'Question' }, { key: 'exam_type', label: 'Exam' },
@@ -99,7 +105,7 @@ const tableColumns: Record<TableName, Array<{ key: string; label: string }>> = {
 };
 
 const searchColumns: Record<TableName, string[]> = {
-  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning'],
+  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'example_sentence', 'example_meaning'],
   kotoba: ['word', 'reading', 'meaning', 'example_sentence', 'example_meaning'],
   bunpou: ['title', 'structure', 'meaning', 'example_sentence'],
   questions: ['question_text', 'exam_type', 'section', 'explanation', 'options'],
@@ -382,6 +388,7 @@ function AdminDashboard() {
   const [excelRows, setExcelRows] = useState<Record<string, unknown>[]>([]);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const previewColumns = excelTable === 'questions' ? Object.keys(excelRows[0] ?? {}) : sampleTemplateHeaders[excelTable];
 
   const fetchAllData = async () => {
     try {
@@ -451,7 +458,7 @@ function AdminDashboard() {
   const handleEntityEdit = (kind: TableName, row: EntityRow) => {
     if (kind === 'kanji') {
       const item = row as KanjiItem;
-      setKanjiForm({ kanji: item.kanji, onyomi: item.onyomi ?? '', kunyomi: item.kunyomi ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, stroke_count: item.stroke_count ?? 0 });
+      setKanjiForm({ kanji: item.kanji, onyomi: item.onyomi ?? '', kunyomi: item.kunyomi ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, stroke_count: item.stroke_count ?? 1, example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '' });
     } else if (kind === 'kotoba') {
       const item = row as KotobaItem;
       setKotobaForm({ word: item.word, reading: item.reading ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, part_of_speech: item.part_of_speech ?? '', example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '' });
@@ -501,6 +508,8 @@ function AdminDashboard() {
       meaning: kanjiForm.meaning,
       jlpt_level: kanjiForm.jlpt_level,
       stroke_count: Number(kanjiForm.stroke_count),
+      example_sentence: kanjiForm.example_sentence,
+      example_meaning: kanjiForm.example_meaning,
     };
 
     const { error } = await (supabase.from('kanji') as any).insert([payload]);
@@ -620,9 +629,14 @@ function AdminDashboard() {
 
     try {
       setIsSubmitting(true);
-      const { error } = await (supabase.from(excelTable) as any).insert(excelRows as any[]);
-      if (error) throw error;
-      setMessage(`${excelRows.length} rows uploaded to ${tableDisplayLabels[excelTable]}.`);
+      if (excelTable === 'questions') {
+        const { error } = await supabase.from('questions').insert(excelRows as any[]);
+        if (error) throw error;
+        setMessage(`${excelRows.length} rows uploaded to ${tableDisplayLabels[excelTable]}.`);
+      } else {
+        const importedCount = await upsertMasterData(excelTable, excelRows);
+        setMessage(`${importedCount} rows imported or updated in ${tableDisplayLabels[excelTable]}.`);
+      }
       setExcelRows([]);
       setSelectedFileName('');
       void fetchAllData();
@@ -661,6 +675,8 @@ function AdminDashboard() {
               { label: 'Meaning', name: 'meaning', value: kanjiForm.meaning, onChange: (value) => setKanjiForm((current) => ({ ...current, meaning: value })) },
               { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: kanjiForm.jlpt_level, onChange: (value) => setKanjiForm((current) => ({ ...current, jlpt_level: value })) },
               { label: 'Stroke Count', name: 'stroke_count', type: 'number', value: kanjiForm.stroke_count, onChange: (value) => setKanjiForm((current) => ({ ...current, stroke_count: Number(value) })) },
+              { label: 'Example Sentence', name: 'example_sentence', value: kanjiForm.example_sentence, onChange: (value) => setKanjiForm((current) => ({ ...current, example_sentence: value })) },
+              { label: 'Example Meaning', name: 'example_meaning', value: kanjiForm.example_meaning, onChange: (value) => setKanjiForm((current) => ({ ...current, example_meaning: value })) },
             ],
           },
           handleKanjiCreate,
@@ -819,7 +835,7 @@ function AdminDashboard() {
                   <table className="min-w-full text-left text-sm text-slate-200">
                     <thead className="bg-slate-800 text-slate-300">
                       <tr>
-                        {Object.keys(excelRows[0]).map((key) => (
+                        {previewColumns.map((key) => (
                           <th key={key} className="px-3 py-2 whitespace-nowrap">{key}</th>
                         ))}
                       </tr>
@@ -827,11 +843,12 @@ function AdminDashboard() {
                     <tbody>
                       {excelRows.slice(0, 10).map((row: Record<string, unknown>, index) => (
                         <tr key={`${index}-${Object.values(row).join('-')}`} className="border-t border-slate-800">
-                          {Object.values(row).map((value, valueIndex) => (
-                            <td key={`${index}-${valueIndex}`} className="px-3 py-2 align-top">
+                          {previewColumns.map((key) => {
+                            const value = row[key];
+                            return <td key={`${index}-${key}`} className="px-3 py-2 align-top">
                               {typeof value === 'string' || typeof value === 'number' ? String(value) : JSON.stringify(value)}
-                            </td>
-                          ))}
+                            </td>;
+                          })}
                         </tr>
                       ))}
                     </tbody>
@@ -915,36 +932,9 @@ function SummaryCard({ label, value, accent }: { label: string; value: string; a
 }
 
 function normalizeImportedRow(table: TableName, row: Record<string, unknown>) {
+  if (table !== 'questions') return normalizeMasterImportRow(table as MasterDataTable, row);
+
   switch (table) {
-    case 'kanji':
-      return {
-        kanji: String(row.kanji ?? ''),
-        onyomi: String(row.onyomi ?? ''),
-        kunyomi: String(row.kunyomi ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        stroke_count: Number(row.stroke_count ?? 0),
-      };
-    case 'kotoba':
-      return {
-        word: String(row.word ?? ''),
-        reading: String(row.reading ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        part_of_speech: String(row.part_of_speech ?? ''),
-        example_sentence: String(row.example_sentence ?? ''),
-        example_meaning: String(row.example_meaning ?? ''),
-      };
-    case 'bunpou':
-      return {
-        title: String(row.title ?? ''),
-        structure: String(row.structure ?? ''),
-        meaning: String(row.meaning ?? ''),
-        jlpt_level: String(row.jlpt_level ?? 'N5'),
-        example_sentence: String(row.example_sentence ?? ''),
-        nuance: String(row.nuance ?? ''),
-        conjugation_rules: parseConjugationRules(row.conjugation_rules),
-      };
     case 'questions': {
       const options = [
         row.option_a,
