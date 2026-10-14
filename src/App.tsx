@@ -93,17 +93,26 @@ interface AppProfile {
 const emptyAppProfile: AppProfile = { id: '' };
 
 const fetchAppProfile = async (userId: string): Promise<AppProfile> => {
-  if (!userId) return emptyAppProfile;
+  // 1. Cek apakah userId valid dan bukan string "undefined"/"null"
+  if (!userId || userId === 'undefined' || userId === 'null') {
+    return emptyAppProfile;
+  }
 
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, role, full_name')
+      .select('id, role, full_name') // Atau ganti .select('*') jika kolom spesifik belum pasti
       .eq('id', userId)
       .maybeSingle<AppProfile>();
 
-    return error ? emptyAppProfile : data ?? emptyAppProfile;
-  } catch {
+    if (error) {
+      console.error('❌ Error fetching profile:', error.message, error.details);
+      return emptyAppProfile;
+    }
+
+    return data ?? emptyAppProfile;
+  } catch (err) {
+    console.error('❌ Unexpected error in fetchAppProfile:', err);
     return emptyAppProfile;
   }
 };
@@ -134,7 +143,7 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
   const kanjiRows = (kanjiRes.error ? [] : kanjiRes.data ?? []) as Record<string, any>[];
   const kotobaRows = (kotobaRes.error ? [] : kotobaRes.data ?? []) as Record<string, any>[];
   const bunpouRows = (bunpouRes.error ? [] : bunpouRes.data ?? []) as Record<string, any>[];
-  console.log('Fetched counts:', { kanji: kanjiRows.length, kotoba: kotobaRows.length, bunpou: bunpouRows.length });
+  console.log(`Fetched counts -> Bunpou: ${bunpouRows.length}, Kanji: ${kanjiRows.length}, Kotoba: ${kotobaRows.length}`);
   const { data: { user } } = await supabase.auth.getUser();
   let progressRows: UserItemProgress[] = [];
   if (user?.id) {

@@ -185,7 +185,7 @@ export function BunpouStudyPage({ items, onTestThisPoint }: BunpouStudyPageProps
 
               <div className="detail-box bunpou-detail-box bunpou-nuance-box">
                 <label className="bunpou-detail-label">Nuance & Usage</label>
-                <p className="bunpou-detail-main">
+                <p className="bunpou-detail-main text-[12px] md:text-base">
                   {selectedItem.nuanceUsage?.trim() || selectedItem.meaning?.trim() || 'Belum ada penjelasan penggunaan untuk tata bahasa ini.'}
                 </p>
               </div>
