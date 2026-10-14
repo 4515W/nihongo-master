@@ -1079,6 +1079,28 @@
   cursor: pointer;
 }
 
+.theme-switcher-button {
+  display: inline-grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: var(--panel-alt);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.theme-switcher-button:hover,
+.theme-switcher-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
 .detail-body {
   display: flex;
   flex-direction: column;
@@ -1148,6 +1170,90 @@
   background: rgba(30, 41, 59, 0.6);
 }
 
+.bunpou-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.bunpou-meaning-text {
+  margin: 0;
+  color: #e11d48;
+  font-size: 1rem;
+  font-weight: 750;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.app-shell.theme-black .bunpou-meaning-text {
+  color: #fb7185;
+}
+
+.bunpou-structure-text {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--panel-bg);
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.detail-box.bunpou-nuance-box {
+  border-color: rgba(129, 140, 248, 0.3);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.app-shell.theme-black .detail-box.bunpou-nuance-box {
+  border-color: rgba(129, 140, 248, 0.28);
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.bunpou-example-sentence {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.125rem;
+  font-weight: 650;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.app-shell.theme-black .bunpou-example-sentence {
+  color: #f1f5f9;
+}
+
+.bunpou-example-meaning {
+  color: #64748b;
+  font-size: 0.8rem;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+.app-shell.theme-black .bunpou-example-meaning {
+  color: #94a3b8;
+}
+
+.bunpou-modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 0.2rem;
+  padding: 0.85rem 1rem calc(0.85rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 640px) {
+  .bunpou-overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .detail-box .bunpou-detail-label {
   color: #e11d48;
   font-weight: 600;
@@ -1196,6 +1302,78 @@
 
 .app-shell.theme-black .bunpou-table-row {
   border-color: #1e293b;
+}
+
+.bunpou-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: var(--panel-bg);
+}
+
+.bunpou-filter-bar label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.bunpou-filter-bar select {
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--panel-alt);
+  color: var(--text-soft);
+  font: inherit;
+}
+
+.bunpou-level-section {
+  padding: 0.25rem 0.85rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: var(--panel-bg);
+}
+
+.bunpou-level-header {
+  display: flex;
+  width: 100%;
+  min-height: 3rem;
+  align-items: center;
+  gap: 0.65rem;
+  border: 0;
+  background: transparent;
+  color: var(--heading);
+  cursor: pointer;
+  text-align: left;
+}
+
+.bunpou-level-chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform 180ms ease, color 180ms ease;
+}
+
+.bunpou-level-chevron.is-expanded {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+.bunpou-level-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.bunpou-level-summary {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .detail-box label {

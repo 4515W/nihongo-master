@@ -41,11 +41,14 @@ export interface KotobaItem extends Record<string, unknown> {
 export interface BunpouItem extends Record<string, unknown> {
   id: string;
   title: string;
+  reading: string;
   structure: string;
   meaning: string;
   jlpt_level: JLPTLevel;
   example_sentence?: string | null;
+  example_meaning?: string | null;
   nuance?: string | null;
+  nuance_usage?: string | null;
   conjugation_rules?: Record<string, string> | null;
   created_at?: string;
 }

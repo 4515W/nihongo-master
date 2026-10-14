@@ -11,6 +11,7 @@ export interface ConjugationRules {
 export interface StudyItem {
   id: string;
   type: ItemType;
+  title?: string;
   japanese: string;
   reading: string;
   onyomi?: string;
@@ -19,6 +20,7 @@ export interface StudyItem {
   jlptLevel: JLPTLevel;
   structure?: string;
   nuance?: string;
+  nuanceUsage?: string;
   conjugationRules?: ConjugationRules;
   exampleJp?: string;
   exampleMeaning?: string;

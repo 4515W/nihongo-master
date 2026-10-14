@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { parseConjugationRules } from '../../lib/grammar';
-import { normalizeMasterImportRow, upsertMasterData, type MasterDataTable } from '../../lib/masterDataImport';
+import { importChunkSize, normalizeMasterImportRow, upsertMasterData, type MasterDataTable } from '../../lib/masterDataImport';
 import { useBackDismiss } from '../../lib/useBackDismiss';
 import type {
   BunpouItem,
@@ -56,11 +56,13 @@ const defaultKotobaForm = {
 
 const defaultBunpouForm = {
   title: '',
+  reading: '',
   structure: '',
   meaning: '',
   jlpt_level: 'N5',
   example_sentence: '',
-  nuance: '',
+  example_meaning: '',
+  nuance_usage: '',
   conjugation_rules: '{}',
 };
 
@@ -76,7 +78,7 @@ const defaultQuestionForm = {
 const sampleTemplateHeaders: Record<TableName, string[]> = {
   kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count', 'example_sentence', 'example_meaning'],
   kotoba: ['word', 'reading', 'meaning', 'jlpt_level', 'part_of_speech', 'example_sentence', 'example_meaning'],
-  bunpou: ['title', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'nuance', 'conjugation_rules'],
+  bunpou: ['title', 'reading', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'example_meaning', 'nuance', 'nuance_usage', 'conjugation_rules'],
   questions: ['exam_type', 'section', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation'],
 };
 
@@ -93,10 +95,11 @@ const tableColumns: Record<TableName, Array<{ key: string; label: string }>> = {
     { key: 'example_sentence', label: 'Example Sentence' }, { key: 'example_meaning', label: 'Example Meaning' },
   ],
   bunpou: [
-    { key: 'title', label: 'Grammar' }, { key: 'structure', label: 'Structure' },
-    { key: 'meaning', label: 'Meaning' }, { key: 'jlpt_level', label: 'JLPT' },
-    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'nuance', label: 'Nuance' },
-    { key: 'conjugation_rules', label: 'Conjugation Rules' },
+    { key: 'title', label: 'Grammar' }, { key: 'reading', label: 'Reading' },
+    { key: 'structure', label: 'Structure' }, { key: 'meaning', label: 'Meaning' },
+    { key: 'jlpt_level', label: 'JLPT' }, { key: 'example_sentence', label: 'Example Sentence' },
+    { key: 'example_meaning', label: 'Example Meaning' }, { key: 'nuance', label: 'Nuance' },
+    { key: 'nuance_usage', label: 'Nuance & Usage' }, { key: 'conjugation_rules', label: 'Conjugation Rules' },
   ],
   questions: [
     { key: 'question_text', label: 'Question' }, { key: 'exam_type', label: 'Exam' },
@@ -107,7 +110,7 @@ const tableColumns: Record<TableName, Array<{ key: string; label: string }>> = {
 const searchColumns: Record<TableName, string[]> = {
   kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'example_sentence', 'example_meaning'],
   kotoba: ['word', 'reading', 'meaning', 'example_sentence', 'example_meaning'],
-  bunpou: ['title', 'structure', 'meaning', 'example_sentence'],
+  bunpou: ['title', 'reading', 'structure', 'meaning', 'example_sentence', 'example_meaning', 'nuance_usage'],
   questions: ['question_text', 'exam_type', 'section', 'explanation', 'options'],
 };
 
@@ -383,6 +386,7 @@ function AdminDashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [uploadProgress, setUploadProgress] = useState('');
 
   const [excelTable, setExcelTable] = useState<TableName>('kanji');
   const [excelRows, setExcelRows] = useState<Record<string, unknown>[]>([]);
@@ -441,7 +445,7 @@ function AdminDashboard() {
       : kind === 'kotoba'
       ? kotobaForm
       : kind === 'bunpou'
-      ? { ...bunpouForm, conjugation_rules: parseConjugationRules(bunpouForm.conjugation_rules) }
+      ? { ...bunpouForm, nuance: bunpouForm.nuance_usage, conjugation_rules: parseConjugationRules(bunpouForm.conjugation_rules) }
       : {
           exam_type: questionForm.exam_type,
           section: questionForm.section,
@@ -464,7 +468,7 @@ function AdminDashboard() {
       setKotobaForm({ word: item.word, reading: item.reading ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, part_of_speech: item.part_of_speech ?? '', example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '' });
     } else if (kind === 'bunpou') {
       const item = row as BunpouItem;
-      setBunpouForm({ title: item.title, structure: item.structure, meaning: item.meaning, jlpt_level: item.jlpt_level, example_sentence: item.example_sentence ?? '', nuance: item.nuance ?? '', conjugation_rules: JSON.stringify(item.conjugation_rules ?? {}, null, 2) });
+      setBunpouForm({ title: item.title, reading: item.reading, structure: item.structure, meaning: item.meaning, jlpt_level: item.jlpt_level, example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '', nuance_usage: item.nuance_usage ?? item.nuance ?? '', conjugation_rules: JSON.stringify(item.conjugation_rules ?? {}, null, 2) });
     } else {
       const item = row as Question;
       setQuestionForm({ exam_type: item.exam_type, section: item.section, question_text: item.question_text, options: [item.options[0] ?? '', item.options[1] ?? '', item.options[2] ?? '', item.options[3] ?? ''], correct_answer: item.correct_answer, explanation: item.explanation ?? '' });
@@ -554,11 +558,14 @@ function AdminDashboard() {
     event.preventDefault();
     const payload = {
       title: bunpouForm.title,
+      reading: bunpouForm.reading,
       structure: bunpouForm.structure,
       meaning: bunpouForm.meaning,
       jlpt_level: bunpouForm.jlpt_level,
       example_sentence: bunpouForm.example_sentence,
-      nuance: bunpouForm.nuance,
+      example_meaning: bunpouForm.example_meaning,
+      nuance: bunpouForm.nuance_usage,
+      nuance_usage: bunpouForm.nuance_usage,
       conjugation_rules: parseConjugationRules(bunpouForm.conjugation_rules),
     };
 
@@ -629,12 +636,30 @@ function AdminDashboard() {
 
     try {
       setIsSubmitting(true);
+      setUploadProgress('');
       if (excelTable === 'questions') {
-        const { error } = await supabase.from('questions').insert(excelRows as any[]);
-        if (error) throw error;
+        const totalBatches = Math.ceil(excelRows.length / importChunkSize);
+        for (let start = 0; start < excelRows.length; start += importChunkSize) {
+          const batchNumber = Math.floor(start / importChunkSize) + 1;
+          setUploadProgress(`Uploading batch ${batchNumber} of ${totalBatches}...`);
+          const payload = excelRows.slice(start, start + importChunkSize);
+          const { error } = await supabase.from('questions').upsert(payload as any[], {
+            onConflict: 'id',
+            ignoreDuplicates: false,
+          });
+          if (error) {
+            console.error(`Error uploading batch starting at index ${start}:`, error);
+            console.error('Supabase error details:', { details: error.details, message: error.message, hint: error.hint });
+            throw error;
+          }
+        }
+        setUploadProgress('Upload complete.');
         setMessage(`${excelRows.length} rows uploaded to ${tableDisplayLabels[excelTable]}.`);
       } else {
-        const importedCount = await upsertMasterData(excelTable, excelRows);
+        const importedCount = await upsertMasterData(excelTable, excelRows, (batchNumber, totalBatches) => {
+          setUploadProgress(`Uploading batch ${batchNumber} of ${totalBatches}...`);
+        });
+        setUploadProgress('Upload complete.');
         setMessage(`${importedCount} rows imported or updated in ${tableDisplayLabels[excelTable]}.`);
       }
       setExcelRows([]);
@@ -643,6 +668,7 @@ function AdminDashboard() {
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : 'Upload failed.';
       setErrorMessage(errMessage);
+      setUploadProgress('');
     } finally {
       setIsSubmitting(false);
     }
@@ -713,11 +739,13 @@ function AdminDashboard() {
             label: 'Bunpou',
             fields: [
               { label: 'Title', name: 'title', value: bunpouForm.title, onChange: (value) => setBunpouForm((current) => ({ ...current, title: value })) },
+              { label: 'Reading', name: 'reading', value: bunpouForm.reading, onChange: (value) => setBunpouForm((current) => ({ ...current, reading: value })) },
               { label: 'Structure', name: 'structure', value: bunpouForm.structure, onChange: (value) => setBunpouForm((current) => ({ ...current, structure: value })) },
               { label: 'Meaning', name: 'meaning', value: bunpouForm.meaning, onChange: (value) => setBunpouForm((current) => ({ ...current, meaning: value })) },
               { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: bunpouForm.jlpt_level, onChange: (value) => setBunpouForm((current) => ({ ...current, jlpt_level: value })) },
               { label: 'Example Sentence', name: 'example_sentence', value: bunpouForm.example_sentence, onChange: (value) => setBunpouForm((current) => ({ ...current, example_sentence: value })) },
-              { label: 'Nuance & Usage Notes', name: 'nuance', type: 'textarea', value: bunpouForm.nuance, onChange: (value) => setBunpouForm((current) => ({ ...current, nuance: value })) },
+              { label: 'Example Meaning', name: 'example_meaning', value: bunpouForm.example_meaning, onChange: (value) => setBunpouForm((current) => ({ ...current, example_meaning: value })) },
+              { label: 'Nuance & Usage Notes', name: 'nuance_usage', type: 'textarea', value: bunpouForm.nuance_usage, onChange: (value) => setBunpouForm((current) => ({ ...current, nuance_usage: value })) },
               { label: 'Conjugation Rules (JSON)', name: 'conjugation_rules', type: 'textarea', value: bunpouForm.conjugation_rules, onChange: (value) => setBunpouForm((current) => ({ ...current, conjugation_rules: value })) },
             ],
           },
@@ -815,6 +843,10 @@ function AdminDashboard() {
 
             {errorMessage && (
               <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{errorMessage}</div>
+            )}
+
+            {uploadProgress && (
+              <div className="rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200" role="status">{uploadProgress}</div>
             )}
 
             {excelRows.length > 0 && (

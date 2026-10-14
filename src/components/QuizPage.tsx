@@ -74,12 +74,24 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
     if (!canStartQuiz) return;
 
     const questionType = selectedCategory === 'kanji' ? selectedKanjiQuestionType : 'meaning';
-    const randomized = [...quizPool].sort(() => 0.5 - Math.random());
-    const target = targetedItemId ? randomized.find((item) => item.id === targetedItemId && (!targetedItemType || item.type === targetedItemType)) : undefined;
-    const shuffled = [
-      ...(target ? [target] : []),
-      ...randomized.filter((item) => item.id !== target?.id),
-    ].slice(0, questionCount);
+    const unmastered = quizPool.filter((item) => !item.isMastered).sort(() => 0.5 - Math.random());
+    const mastered = quizPool.filter((item) => item.isMastered).sort(() => 0.5 - Math.random());
+    const targetUnmasteredCount = Math.ceil(questionCount * 0.8);
+    const selectedUnmastered = unmastered.slice(0, Math.min(targetUnmasteredCount, questionCount));
+    const selectedMastered = mastered.slice(0, questionCount - selectedUnmastered.length);
+    const selected = [...selectedUnmastered, ...selectedMastered];
+    const remainingCount = questionCount - selected.length;
+    if (remainingCount > 0) {
+      selected.push(...unmastered.slice(selectedUnmastered.length, selectedUnmastered.length + remainingCount));
+    }
+
+    const randomizedSelection = selected.sort(() => 0.5 - Math.random());
+    const target = targetedItemId
+      ? quizPool.find((item) => item.id === targetedItemId && (!targetedItemType || item.type === targetedItemType))
+      : undefined;
+    const shuffled = target
+      ? [target, ...randomizedSelection.filter((item) => item.id !== target.id || item.type !== target.type)].slice(0, questionCount)
+      : randomizedSelection.slice(0, questionCount);
     const generatedOptions = shuffled.map((question) => {
       const correctAnswer = questionType === 'reading' ? getKanjiReading(question) : question.meaning;
       const answerPool = questionType === 'reading'
@@ -106,6 +118,8 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
   };
 
   const currentItem = quizItems[currentQuestionIndex];
+  const exampleSentence = currentItem?.exampleJp?.trim() ?? '';
+  const exampleMeaning = currentItem?.exampleMeaning?.trim();
   const options = questionOptions[currentQuestionIndex] ?? [];
   const correctAnswer = currentItem
     ? activeQuestionType === 'reading' ? getKanjiReading(currentItem) : currentItem.meaning
@@ -149,6 +163,15 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
     const uniqueCorrectItems = [...new Map(
       correctReviews.map(({ item }) => [`${item.type}:${item.id}`, item]),
     ).values()];
+    const uniqueMasteredWrongItems = [...new Map(
+      reviewItems
+        .filter((review) => !review.isCorrect && review.item.isMastered)
+        .map(({ item }) => [`${item.type}:${item.id}`, item]),
+    ).values()];
+    const progressUpdates = [
+      ...uniqueCorrectItems.map((item) => ({ item, isMastered: true })),
+      ...uniqueMasteredWrongItems.map((item) => ({ item, isMastered: false })),
+    ];
     setMasteryPoints(pointsEarned);
 
     try {
@@ -169,24 +192,24 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
           points_earned: pointsEarned,
           completed_at: new Date().toISOString(),
         }),
-        uniqueCorrectItems.length
-          ? supabase.from('user_item_progress').upsert(uniqueCorrectItems.map((item) => ({
+        progressUpdates.length
+          ? supabase.from('user_item_progress').upsert(progressUpdates.map(({ item, isMastered }) => ({
             user_id: user.id,
             item_id: String(item.id),
             item_type: item.type.toLowerCase(),
-            streak_count: Math.max(3, item.masteryStreak ?? 0),
-            is_mastered: true,
+            streak_count: isMastered ? Math.max(3, item.masteryStreak ?? 0) : 0,
+            is_mastered: isMastered,
             updated_at: new Date().toISOString(),
           })), { onConflict: 'user_id,item_type,item_id' })
           : Promise.resolve({ error: null }),
       ]);
 
       if (!progressResult.error) {
-        for (const item of uniqueCorrectItems) {
+        for (const { item, isMastered } of progressUpdates) {
           onMasteryUpdate?.(item.type, item.id, {
-            streakCount: Math.max(3, item.masteryStreak ?? 0),
-            isMastered: true,
-            newlyMastered: !item.isMastered,
+            streakCount: isMastered ? Math.max(3, item.masteryStreak ?? 0) : 0,
+            isMastered,
+            newlyMastered: isMastered && !item.isMastered,
           });
         }
       }
@@ -418,14 +441,12 @@ export const QuizPage: React.FC<Props> = ({ items, isDark: _isDark, targetedItem
             {progressError && <p className="quiz-helper" role="alert">{progressError}</p>}
             <div className="quiz-example-box">
               <strong>Example Sentence / Usage</strong>
-              <button type="button" className="quiz-example-audio" aria-label="Play example sentence" onClick={() => speakJapanese(currentItem?.exampleJp || currentItem?.japanese || '')}><Volume2 size={16} /></button>
-              {currentItem?.exampleJp ? (
+              <button type="button" className="quiz-example-audio" aria-label="Play example sentence" onClick={() => speakJapanese(exampleSentence || currentItem?.japanese || '')}><Volume2 size={16} /></button>
+              {exampleSentence ? (
                 <>
-                  <p><FuriganaText text={currentItem.exampleJp} word={currentItem.type === 'kotoba' ? currentItem.japanese : undefined} reading={currentItem.type === 'kotoba' ? currentItem.reading : undefined} /></p>
-                  {currentItem.exampleMeaning && <p>{currentItem.exampleMeaning}</p>}
+                  <p><FuriganaText text={exampleSentence} word={currentItem?.type === 'kotoba' ? currentItem.japanese : undefined} reading={currentItem?.type === 'kotoba' ? currentItem.reading : undefined} /></p>
+                  {exampleMeaning && <p>{exampleMeaning}</p>}
                 </>
-              ) : currentItem?.structure ? (
-                <p>{currentItem.structure}</p>
               ) : (
                 <p>No example sentence available for this item.</p>
               )}

@@ -62,6 +62,27 @@ interface DashboardStats {
 }
 
 const emptyDashboardStats: DashboardStats = { masteredCount: null, masteredItemIdsByType: null, quizAttempts: 0, quizCorrect: 0, completedItems: 0 };
+const AUTH_CHECK_TIMEOUT_MS = 4000;
+
+const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => new Promise((resolve) => {
+  let settled = false;
+  const timeoutId = window.setTimeout(() => {
+    settled = true;
+    resolve(null);
+  }, timeoutMs);
+
+  promise.then((value) => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timeoutId);
+    resolve(value);
+  }, () => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timeoutId);
+    resolve(null);
+  });
+});
 
 interface AppProfile {
   id: string;
@@ -136,6 +157,8 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
       kunyomi: String(item.kunyomi ?? ''),
       meaning: String(item.meaning ?? ''),
       jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
+      exampleJp: item.example_sentence ?? undefined,
+      exampleMeaning: item.example_meaning ?? undefined,
       isMastered: false,
       createdAt: item.created_at ?? new Date().toISOString(),
     })),
@@ -155,14 +178,17 @@ const fetchStudyData = async (): Promise<StudyItem[]> => {
     ...bunpouRows.map((item) => ({
       id: String(item.id),
       type: 'bunpou' as const,
+      title: String(item.title ?? ''),
       japanese: String(item.title ?? ''),
       reading: String(item.structure ?? '—'),
       meaning: String(item.meaning ?? ''),
       jlptLevel: (item.jlpt_level ?? 'N5') as StudyItem['jlptLevel'],
       structure: String(item.structure ?? ''),
       nuance: item.nuance ? String(item.nuance) : undefined,
+      nuanceUsage: item.nuance_usage ? String(item.nuance_usage) : undefined,
       conjugationRules: item.conjugation_rules ?? undefined,
-      exampleJp: String(item.example_sentence ?? ''),
+      exampleJp: item.example_sentence ?? undefined,
+      exampleMeaning: item.example_meaning ?? undefined,
       isMastered: false,
       createdAt: item.created_at ?? new Date().toISOString(),
     })),
@@ -272,11 +298,26 @@ function AppShell() {
 
     const loadData = async () => {
       setIsLoading(true);
-      const [data, stats] = await Promise.all([fetchStudyData(), fetchDashboardStats()]);
-      if (!mounted) return;
-      setItems(data);
-      setDashboardStats(stats);
-      setIsLoading(false);
+      void withTimeout(
+        supabase.auth.getSession().then(() => true),
+        AUTH_CHECK_TIMEOUT_MS,
+      ).then(() => {
+        if (mounted) setIsLoading(false);
+      });
+
+      try {
+        const [data, stats] = await Promise.all([fetchStudyData(), fetchDashboardStats()]);
+        if (!mounted) return;
+        setItems(data);
+        setDashboardStats(stats);
+      } catch (error) {
+        if (!mounted) return;
+        console.error('Unable to load initial study data:', error);
+        setItems([]);
+        setDashboardStats(emptyDashboardStats);
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
     };
 
     void loadData();
@@ -308,9 +349,10 @@ function AppShell() {
     let isMounted = true;
 
     const syncUserProfile = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await withTimeout(
+        supabase.auth.getSession().then(({ data }) => data.session),
+        AUTH_CHECK_TIMEOUT_MS,
+      );
 
       if (!isMounted) return;
 
