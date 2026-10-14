@@ -115,8 +115,9 @@ export async function upsertMasterData(
     const batchNumber = Math.floor(start / importChunkSize) + 1;
     console.log(`Uploading batch ${batchNumber} of ${totalBatches}...`);
     const payload = mergedRows.slice(start, start + importChunkSize);
+    
     const { error: upsertError } = await (supabase.from(table) as any).upsert(payload, {
-      onConflict: 'id',
+      onConflict: 'kanji,jlpt_level',
       ignoreDuplicates: false,
     });
     if (upsertError) {

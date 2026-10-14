@@ -6,6 +6,7 @@ import './App.css';
 import { FlashcardsPage } from './components/FlashcardPage';
 import { QuizPage } from './components/QuizPage';
 import { DataBankPage } from './components/DataBankPage';
+import { KanaPage} from './components/KanaPage';
 import { BunpouStudyPage } from './components/BunpouStudyPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
@@ -38,13 +39,14 @@ import type { ItemType } from './types';
 import type { QuizProgressResult } from './lib/progress';
 
 type ThemeMode = 'black' | 'light';
-type AppTab = 'dashboard' | 'flashcards' | 'bunpou' | 'quiz' | 'databank';
+type AppTab = 'dashboard' | 'flashcards' | 'bunpou' | 'quiz' | 'databank' | 'kana';
 const navigationTabs: { id: AppTab; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'flashcards', label: 'Flashcards' },
   { id: 'bunpou', label: 'Bunpou' },
   { id: 'quiz', label: 'Quiz' },
   { id: 'databank', label: 'Data Bank' },
+  { id: 'kana', label: 'Kana' },
 ];
 const jlptLevels = ['N5', 'N4', 'N3', 'N2', 'N1'] as const;
 const masteryCategories = [
@@ -269,6 +271,7 @@ function AppShell() {
     '/bunpou-study': 'bunpou',
     '/quiz': 'quiz',
     '/data-bank': 'databank',
+    '/kana': 'kana',
   } as Record<string, AppTab>)[location.pathname] ?? 'dashboard';
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -434,7 +437,7 @@ function AppShell() {
   };
 
   const navigateToTab = (tab: AppTab) => {
-    const tabPath: Record<AppTab, string> = { dashboard: '/', flashcards: '/flashcards', bunpou: '/bunpou-study', quiz: '/quiz', databank: '/data-bank' };
+    const tabPath: Record<AppTab, string> = { dashboard: '/', flashcards: '/flashcards', bunpou: '/bunpou-study', quiz: '/quiz', databank: '/data-bank', kana: '/kana' };
     navigate(tabPath[tab], { replace: isMenuOpen });
   };
 
@@ -892,6 +895,10 @@ function AppShell() {
           <DataBankPage items={items} isDark={themeMode === 'black'} />
         )}
 
+         {activeTab === 'kana' && (
+          <KanaPage/>
+        )}
+
       </main>
     </div>
   );
@@ -912,6 +919,7 @@ export default function App() {
         <Route path="/flashcards" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
         <Route path="/bunpou-study" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
         <Route path="/data-bank" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
+        <Route path="/kana" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
         <Route path="/login" element={<LoginPage />} />
         <Route
           path="/kanji"
