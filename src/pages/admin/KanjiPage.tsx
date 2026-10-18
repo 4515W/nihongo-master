@@ -26,7 +26,11 @@ export function KanjiPage() {
 
   const fetchRows = async () => {
     setLoading(true);
-    const { data, error: fetchError } = await supabase.from('kanji').select('*').order('id', { ascending: false });
+    const { data, error: fetchError } = await supabase
+      .from('kanji')
+      .select('*')
+      .range(0, 4999)
+      .order('id', { ascending: true });
     if (fetchError) {
       setError(fetchError.message);
       setLoading(false);

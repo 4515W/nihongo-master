@@ -126,9 +126,10 @@ interface EntityManagementProps {
   onEdit: (row: EntityRow) => void;
   onReset: () => void;
   onDelete: (id: string) => Promise<void>;
+  onFilterChange?: (filter: string) => void | Promise<void>;
 }
 
-function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate, onEdit, onReset, onDelete }: EntityManagementProps) {
+function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate, onEdit, onReset, onDelete, onFilterChange }: EntityManagementProps) {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterValue, setFilterValue] = useState('ALL');
@@ -251,7 +252,12 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
         </label>
         <label className="flex items-center gap-2 text-sm text-slate-400">
           <span>{kind === 'questions' ? 'Section' : 'JLPT'}</span>
-          <select value={filterValue} onChange={(event) => { setFilterValue(event.target.value); setCurrentPage(1); }} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
+          <select value={filterValue} onChange={(event) => {
+            const selectedFilter = event.target.value;
+            setFilterValue(selectedFilter);
+            setCurrentPage(1);
+            if (kind === 'kanji') void onFilterChange?.(selectedFilter);
+          }} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
             <option value="ALL">All</option>
             {filterOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
@@ -442,6 +448,19 @@ function AdminDashboard() {
     void fetchAllData();
   }, []);
 
+  const fetchKanjiRows = async (jlptFilter: string) => {
+    let query = supabase.from('kanji').select('*');
+    if (jlptFilter !== 'ALL') query = query.eq('jlpt_level', jlptFilter);
+    const { data, error } = await query.range(0, 4999).order('id', { ascending: false });
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setKanjiRows((data ?? []) as KanjiItem[]);
+    setErrorMessage('');
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     navigate('/login', { replace: true });
@@ -517,6 +536,7 @@ function AdminDashboard() {
       onEdit={(row) => handleEntityEdit(kind, row)}
       onReset={() => handleEntityReset(kind)}
       onDelete={onDelete}
+      onFilterChange={kind === 'kanji' ? fetchKanjiRows : undefined}
     />
   );
 
