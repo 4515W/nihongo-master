@@ -378,6 +378,7 @@ function AdminDashboard() {
   const [kotobaRows, setKotobaRows] = useState<KotobaItem[]>([]);
   const [bunpouRows, setBunpouRows] = useState<BunpouItem[]>([]);
   const [questionRows, setQuestionRows] = useState<Question[]>([]);
+  const [dashboardCounts, setDashboardCounts] = useState({ kanji: 0, kotoba: 0, bunpou: 0, questions: 0 });
 
   const [kanjiForm, setKanjiForm] = useState(defaultKanjiForm);
   const [kotobaForm, setKotobaForm] = useState(defaultKotobaForm);
@@ -398,22 +399,36 @@ function AdminDashboard() {
 
   const fetchAllData = async () => {
     try {
-      const [kanjiResult, kotobaResult, bunpouResult, questionResult] = await Promise.all([
-        supabase.from('kanji').select('*').order('id', { ascending: false }),
-        supabase.from('kotoba').select('*').order('id', { ascending: false }),
-        supabase.from('bunpou').select('*').order('id', { ascending: false }),
-        supabase.from('questions').select('*').order('created_at', { ascending: false }),
+      const [kanjiResult, kotobaResult, bunpouResult, questionResult, kanjiCountResult, kotobaCountResult, bunpouCountResult, questionCountResult] = await Promise.all([
+        supabase.from('kanji').select('*').range(0, 4999).order('id', { ascending: false }),
+        supabase.from('kotoba').select('*').range(0, 4999).order('id', { ascending: false }),
+        supabase.from('bunpou').select('*').range(0, 4999).order('id', { ascending: false }),
+        supabase.from('questions').select('*').range(0, 4999).order('created_at', { ascending: false }),
+        supabase.from('kanji').select('*', { count: 'exact', head: true }),
+        supabase.from('kotoba').select('*', { count: 'exact', head: true }),
+        supabase.from('bunpou').select('*', { count: 'exact', head: true }),
+        supabase.from('questions').select('*', { count: 'exact', head: true }),
       ]);
 
       if (kanjiResult.error) throw kanjiResult.error;
       if (kotobaResult.error) throw kotobaResult.error;
       if (bunpouResult.error) throw bunpouResult.error;
       if (questionResult.error) throw questionResult.error;
+      if (kanjiCountResult.error) throw kanjiCountResult.error;
+      if (kotobaCountResult.error) throw kotobaCountResult.error;
+      if (bunpouCountResult.error) throw bunpouCountResult.error;
+      if (questionCountResult.error) throw questionCountResult.error;
 
       setKanjiRows((kanjiResult.data ?? []) as KanjiItem[]);
       setKotobaRows((kotobaResult.data ?? []) as KotobaItem[]);
       setBunpouRows((bunpouResult.data ?? []) as BunpouItem[]);
       setQuestionRows((questionResult.data ?? []) as Question[]);
+      setDashboardCounts({
+        kanji: kanjiCountResult.count ?? 0,
+        kotoba: kotobaCountResult.count ?? 0,
+        bunpou: bunpouCountResult.count ?? 0,
+        questions: questionCountResult.count ?? 0,
+      });
       setErrorMessage('');
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : 'Unable to load data.';
@@ -434,10 +449,10 @@ function AdminDashboard() {
 
   const renderOverview = () => (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <SummaryCard label="Kanji" value={String(kanjiRows.length)} accent="indigo" />
-      <SummaryCard label="Kotoba" value={String(kotobaRows.length)} accent="blue" />
-      <SummaryCard label="Bunpou" value={String(bunpouRows.length)} accent="purple" />
-      <SummaryCard label="Questions" value={String(questionRows.length)} accent="emerald" />
+      <SummaryCard label="Kanji" value={String(dashboardCounts.kanji)} accent="indigo" />
+      <SummaryCard label="Kotoba" value={String(dashboardCounts.kotoba)} accent="blue" />
+      <SummaryCard label="Bunpou" value={String(dashboardCounts.bunpou)} accent="purple" />
+      <SummaryCard label="Questions" value={String(dashboardCounts.questions)} accent="emerald" />
     </div>
   );
 
