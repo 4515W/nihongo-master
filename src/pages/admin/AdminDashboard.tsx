@@ -371,6 +371,8 @@ function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate
 function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<AdminTab>('Overview');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [selectedJlptLevel, setSelectedJlptLevel] = useState<'n5' | 'n4' | 'n3' | 'n2' | 'n1'>('n5');
 
   const [kanjiRows, setKanjiRows] = useState<KanjiItem[]>([]);
   const [kotobaRows, setKotobaRows] = useState<KotobaItem[]>([]);
@@ -632,6 +634,154 @@ function AdminDashboard() {
     }
   };
 
+  const handleSyncKanjiApi = async () => {
+    setIsSyncing(true);
+    setErrorMessage('');
+    setMessage('');
+    setUploadProgress('Fetching kanji list...');
+    const levelNum = String(selectedJlptLevel).replace(/[^0-9]/g, '');
+
+    try {
+      const listResponse = await fetch(`https://kanjiapi.dev/v1/kanji/jlpt-${levelNum}`);
+      if (!listResponse.ok) throw new Error(`KanjiAPI request failed (${listResponse.status}).`);
+      const kanjiList: string[] = await listResponse.json();
+      const payloadList: Record<string, unknown>[] = [];
+
+      for (let start = 0; start < kanjiList.length; start += importChunkSize) {
+        const kanjiBatch = kanjiList.slice(start, start + importChunkSize);
+        setUploadProgress(`Fetching kanji details ${start + 1} to ${start + kanjiBatch.length} of ${kanjiList.length}...`);
+        const entriesBatch = await Promise.all(kanjiBatch.map(async (kanji) => {
+          const response = await fetch(`https://kanjiapi.dev/v1/kanji/${encodeURIComponent(kanji)}`);
+          if (!response.ok) throw new Error(`Failed to fetch details for ${kanji} (${response.status}).`);
+          const details = await response.json() as {
+            kanji: string;
+            kun_readings?: string[];
+            meanings?: string[];
+            on_readings?: string[];
+            stroke_count?: number;
+          };
+
+          let exampleSentence = '';
+          let exampleMeaning = '';
+          try {
+            const wordsResponse = await fetch(`https://kanjiapi.dev/v1/words/${encodeURIComponent(kanji)}`);
+            if (wordsResponse.ok) {
+              const words = await wordsResponse.json() as Array<{
+                variants?: Array<{ written?: string; pronounced?: string }>;
+                meanings?: Array<{ glosses?: string[] }>;
+              }>;
+              const firstWord = words[0];
+              const firstVariant = firstWord?.variants?.[0];
+              if (firstVariant?.written && firstVariant.pronounced) {
+                exampleSentence = `${firstVariant.written} (${firstVariant.pronounced})`;
+              }
+              exampleMeaning = firstWord?.meanings?.[0]?.glosses?.join(', ') ?? '';
+            }
+          } catch {
+            // Keep examples empty when the words endpoint is unavailable.
+          }
+
+          return { details, exampleSentence, exampleMeaning };
+        }));
+
+        payloadList.push(...entriesBatch.map(({ details, exampleSentence, exampleMeaning }) => ({
+          kanji: details.kanji,
+          onyomi: (details.on_readings ?? []).join(', '),
+          kunyomi: (details.kun_readings ?? []).join(', '),
+          stroke_count: details.stroke_count ?? 1,
+          jlpt_level: `N${levelNum}`,
+          meaning: (details.meanings ?? []).join(', '),
+          example_sentence: exampleSentence,
+          example_meaning: exampleMeaning,
+        })));
+      }
+
+      const syncedCount = await upsertMasterData('kanji', payloadList, (batchNumber, totalBatches) => {
+        setUploadProgress(`Syncing batch ${batchNumber} of ${totalBatches}...`);
+      });
+      setUploadProgress('Sync complete.');
+      setMessage(`${syncedCount} kanji synced from KanjiAPI.dev.`);
+      void fetchAllData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to sync kanji from KanjiAPI.dev.');
+      setUploadProgress('');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleExportKanjiToExcel = async () => {
+    setErrorMessage('');
+    setMessage('');
+    setUploadProgress('Fetching kanji list for export...');
+    const levelNum = String(selectedJlptLevel).replace(/[^0-9]/g, '');
+
+    try {
+      const listResponse = await fetch(`https://kanjiapi.dev/v1/kanji/jlpt-${levelNum}`);
+      if (!listResponse.ok) throw new Error(`KanjiAPI request failed (${listResponse.status}).`);
+      const kanjiList: string[] = await listResponse.json();
+      const rows: Record<string, unknown>[] = [];
+
+      for (let start = 0; start < kanjiList.length; start += importChunkSize) {
+        const kanjiBatch = kanjiList.slice(start, start + importChunkSize);
+        setUploadProgress(`Fetching export data ${start + 1} to ${start + kanjiBatch.length} of ${kanjiList.length}...`);
+        const entries = await Promise.all(kanjiBatch.map(async (kanji) => {
+          const response = await fetch(`https://kanjiapi.dev/v1/kanji/${encodeURIComponent(kanji)}`);
+          if (!response.ok) throw new Error(`Failed to fetch details for ${kanji} (${response.status}).`);
+          const details = await response.json() as {
+            kanji: string;
+            kun_readings?: string[];
+            meanings?: string[];
+            on_readings?: string[];
+            stroke_count?: number;
+          };
+
+          let exampleSentence = '';
+          let exampleMeaning = '';
+          try {
+            const wordsResponse = await fetch(`https://kanjiapi.dev/v1/words/${encodeURIComponent(kanji)}`);
+            if (wordsResponse.ok) {
+              const words = await wordsResponse.json() as Array<{
+                variants?: Array<{ written?: string; pronounced?: string }>;
+                meanings?: Array<{ glosses?: string[] }>;
+              }>;
+              const firstWord = words[0];
+              const firstVariant = firstWord?.variants?.[0];
+              if (firstVariant?.written && firstVariant.pronounced) {
+                exampleSentence = `${firstVariant.written} (${firstVariant.pronounced})`;
+              }
+              exampleMeaning = firstWord?.meanings?.[0]?.glosses?.join(', ') ?? '';
+            }
+          } catch {
+            // Keep examples empty when the words endpoint is unavailable.
+          }
+
+          return {
+            kanji: details.kanji,
+            onyomi: (details.on_readings ?? []).join(', '),
+            kunyomi: (details.kun_readings ?? []).join(', '),
+            stroke_count: details.stroke_count ?? 1,
+            jlpt_level: `N${levelNum}`,
+            meaning: (details.meanings ?? []).join(', '),
+            example_sentence: exampleSentence,
+            example_meaning: exampleMeaning,
+          };
+        }));
+        rows.push(...entries);
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Kanji');
+      XLSX.writeFile(workbook, `Kanji_N${levelNum}_KanjiAPI.xlsx`);
+      setUploadProgress('');
+      setMessage(`${rows.length} kanji exported to Excel.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to export kanji from KanjiAPI.dev.');
+      setUploadProgress('');
+    }
+  };
+
   const handleExcelUpload = async () => {
     if (!excelRows.length) {
       setErrorMessage('No parsed data to upload.');
@@ -780,6 +930,40 @@ function AdminDashboard() {
       case 'Excel Import':
         return (
           <div className="space-y-6">
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+              <h3 className="mb-4 text-lg font-semibold text-white">Sync Data from KanjiAPI.dev</h3>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm text-slate-300">
+                  JLPT level
+                  <select
+                    value={selectedJlptLevel}
+                    onChange={(event) => setSelectedJlptLevel(event.target.value as typeof selectedJlptLevel)}
+                    disabled={isSyncing}
+                    className="mt-1 block rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400 disabled:opacity-50"
+                  >
+                    {(['5', '4', '3', '2', '1'] as const).map((level) => (
+                      <option key={level} value={level}>{level.toUpperCase()}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleSyncKanjiApi}
+                  disabled={isSyncing}
+                  className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSyncing ? 'Fetching & Syncing...' : 'Fetch & Sync'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportKanjiToExcel}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm font-medium text-slate-100 hover:border-slate-500"
+                >
+                  Export to Excel
+                </button>
+              </div>
+            </section>
+
             <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
                 <label className="mb-2 block text-sm text-slate-300">Target table</label>
