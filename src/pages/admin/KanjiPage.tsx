@@ -45,6 +45,7 @@ export function KanjiPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       kanji: form.kanji,
       onyomi: form.onyomi,
       kunyomi: form.kunyomi,

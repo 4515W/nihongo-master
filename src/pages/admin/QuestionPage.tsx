@@ -45,6 +45,7 @@ export function QuestionPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       exam_type: form.exam_type,
       section: form.section,
       question_text: form.question_text,
@@ -87,6 +88,7 @@ export function QuestionPage() {
       const rowsFromExcel = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
 
       const normalized = rowsFromExcel.map((row: Record<string, unknown>) => ({
+        id: crypto.randomUUID(),
         exam_type: String(row.exam_type ?? 'JLPT_N5'),
         section: String(row.section ?? 'goi'),
         question_text: String(row.question_text ?? ''),

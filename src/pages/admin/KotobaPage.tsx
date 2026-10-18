@@ -42,6 +42,7 @@ export function KotobaPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       word: form.word,
       reading: form.reading,
       meaning: form.meaning,

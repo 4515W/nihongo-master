@@ -5,7 +5,7 @@ export type MasterDataTable = 'kanji' | 'kotoba' | 'bunpou';
 type ImportRow = Record<string, unknown>;
 
 const importColumns: Record<MasterDataTable, string[]> = {
-  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count', 'example_sentence', 'example_meaning'],
+  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count', 'example_sentence', 'example_meaning', 'created_at'],
   kotoba: ['word', 'reading', 'meaning', 'jlpt_level', 'part_of_speech', 'example_sentence', 'example_meaning', 'related_words'],
   bunpou: ['title', 'reading', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'example_meaning', 'nuance', 'nuance_usage', 'conjugation_rules'],
 };
@@ -22,6 +22,14 @@ const defaultsByTable: Record<MasterDataTable, ImportRow> = {
   bunpou: { jlpt_level: 'N5', conjugation_rules: {} },
 };
 export const importChunkSize = 25;
+
+const createRowId = () => {
+  if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
 
 const isEmpty = (value: unknown) => value == null
   || (typeof value === 'string' && value.trim() === '')
@@ -82,7 +90,10 @@ export async function upsertMasterData(
 ): Promise<number> {
   const rows = inputRows
     .map((row) => normalizeMasterImportRow(table, row))
-    .filter((row) => Object.keys(row).length > 0);
+    .filter((row) => {
+      if (Object.keys(row).length === 0) return false;
+      return !isEmpty(row.id) || !isEmpty(row[naturalKeyByTable[table]]);
+    });
   if (!rows.length) return 0;
 
   const { data, error: fetchError } = await (supabase.from(table) as any).select('*');
@@ -95,20 +106,24 @@ export async function upsertMasterData(
     .filter((row) => !isEmpty(row[naturalKey]))
     .map((row) => [String(row[naturalKey]).trim(), row]));
 
-  const mergedRows = rows.map((row) => {
-    const importedId = isEmpty(row.id) ? '' : String(row.id).trim();
-    const importedKey = isEmpty(row[naturalKey]) ? '' : String(row[naturalKey]).trim();
-    const existing = (importedId ? existingById.get(importedId) : undefined)
-      ?? (importedKey ? existingByNaturalKey.get(importedKey) : undefined);
+  const mergedRows = rows
+    .map((row) => {
+      const importedId = isEmpty(row.id) ? '' : String(row.id).trim();
+      const importedKey = isEmpty(row[naturalKey]) ? '' : String(row[naturalKey]).trim();
+      const existing = (importedId ? existingById.get(importedId) : undefined)
+        ?? (importedKey ? existingByNaturalKey.get(importedKey) : undefined);
 
-    if (!existing && !importedKey) {
-      throw new Error(`Import row is missing the ${naturalKey} identifier.`);
-    }
+      if (!existing && !importedId && !importedKey) {
+        return null;
+      }
 
-    return existing
-      ? { ...existing, ...row, id: existing.id }
-      : { ...defaultsByTable[table], ...row };
-  });
+      const resolvedRow = existing
+        ? { ...existing, ...row, id: existing.id }
+        : { ...defaultsByTable[table], ...row };
+
+      return isEmpty(resolvedRow.id) ? { ...resolvedRow, id: createRowId() } : resolvedRow;
+    })
+    .filter((row): row is ImportRow => row !== null);
 
   const totalBatches = Math.ceil(mergedRows.length / importChunkSize);
   for (let start = 0; start < mergedRows.length; start += importChunkSize) {
@@ -117,7 +132,7 @@ export async function upsertMasterData(
     const payload = mergedRows.slice(start, start + importChunkSize);
     
     const { error: upsertError } = await (supabase.from(table) as any).upsert(payload, {
-      onConflict: 'kanji,jlpt_level',
+      onConflict: 'id',
       ignoreDuplicates: false,
     });
     if (upsertError) {

@@ -506,6 +506,7 @@ function AdminDashboard() {
   const handleKanjiCreate = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       kanji: kanjiForm.kanji,
       onyomi: kanjiForm.onyomi,
       kunyomi: kanjiForm.kunyomi,
@@ -532,6 +533,7 @@ function AdminDashboard() {
   const handleKotobaCreate = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       word: kotobaForm.word,
       reading: kotobaForm.reading,
       meaning: kotobaForm.meaning,
@@ -557,6 +559,7 @@ function AdminDashboard() {
   const handleBunpouCreate = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
+      id: crypto.randomUUID(),
       title: bunpouForm.title,
       reading: bunpouForm.reading,
       structure: bunpouForm.structure,
@@ -585,6 +588,7 @@ function AdminDashboard() {
   const handleQuestionCreate = async (event: FormEvent) => {
     event.preventDefault();
     const payload: Database['public']['Tables']['questions']['Insert'] = {
+      id: crypto.randomUUID(),
       exam_type: questionForm.exam_type,
       section: questionForm.section,
       question_text: questionForm.question_text,
@@ -662,8 +666,6 @@ function AdminDashboard() {
         setUploadProgress('Upload complete.');
         setMessage(`${importedCount} rows imported or updated in ${tableDisplayLabels[excelTable]}.`);
       }
-      setExcelRows([]);
-      setSelectedFileName('');
       void fetchAllData();
     } catch (error) {
       const errMessage = error instanceof Error ? error.message : 'Upload failed.';

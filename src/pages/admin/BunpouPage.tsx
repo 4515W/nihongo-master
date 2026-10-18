@@ -55,6 +55,7 @@ export function BunpouPage() {
       return;
     }
     const payload = {
+      id: crypto.randomUUID(),
       title: form.title,
       reading: form.reading,
       structure: form.structure,
