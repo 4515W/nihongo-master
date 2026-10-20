@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { parseConjugationRules } from '../../lib/grammar';
-import { importChunkSize, normalizeMasterImportRow, upsertMasterData, type MasterDataTable } from '../../lib/masterDataImport';
-import { useBackDismiss } from '../../lib/useBackDismiss';
+import { ExcelImportTab } from '../../components/admin/ExcelImportTab';
+import { MasterDataTab, type AdminEntityRow, type AdminFormValues } from '../../components/admin/MasterDataTab';
+import { QuestionsTab } from '../../components/admin/QuestionsTab';
 import type {
   BunpouItem,
   Database,
@@ -18,20 +18,7 @@ import type {
 const sidebarTabs = ['Overview', 'Kanji', 'Kotoba', 'Bunpou', 'Questions', 'Excel Import'] as const;
 type AdminTab = (typeof sidebarTabs)[number];
 type TableName = 'kanji' | 'kotoba' | 'bunpou' | 'questions';
-
-type EntityRow = KanjiItem | KotobaItem | BunpouItem | Question;
-type EntityField = { label: string; name: string; type?: string; options?: string[]; value: string | number; onChange: (value: string) => void };
-type EntityFormConfig = { key: string; label: string; fields: EntityField[] };
-type ModalMode = 'add' | 'edit' | 'view' | null;
-
-const fileTypeOptions: TableName[] = ['kanji', 'kotoba', 'bunpou', 'questions'];
-
-const tableDisplayLabels: Record<TableName, string> = {
-  kanji: 'Kanji',
-  kotoba: 'Kotoba',
-  bunpou: 'Bunpou',
-  questions: 'Questions',
-};
+const jlptLevels = ['N5', 'N4', 'N3', 'N2', 'N1'] as const;
 
 const defaultKanjiForm = {
   kanji: '',
@@ -75,310 +62,9 @@ const defaultQuestionForm = {
   explanation: '',
 };
 
-const sampleTemplateHeaders: Record<TableName, string[]> = {
-  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'jlpt_level', 'stroke_count', 'example_sentence', 'example_meaning'],
-  kotoba: ['word', 'reading', 'meaning', 'jlpt_level', 'part_of_speech', 'example_sentence', 'example_meaning'],
-  bunpou: ['title', 'reading', 'structure', 'meaning', 'jlpt_level', 'example_sentence', 'example_meaning', 'nuance', 'nuance_usage', 'conjugation_rules'],
-  questions: ['exam_type', 'section', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation'],
-};
-
-const tableColumns: Record<TableName, Array<{ key: string; label: string }>> = {
-  kanji: [
-    { key: 'kanji', label: 'Kanji' }, { key: 'onyomi', label: 'Onyomi' },
-    { key: 'kunyomi', label: 'Kunyomi' }, { key: 'meaning', label: 'Meaning' },
-    { key: 'jlpt_level', label: 'JLPT' }, { key: 'stroke_count', label: 'Strokes' },
-    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'example_meaning', label: 'Example Meaning' },
-  ],
-  kotoba: [
-    { key: 'word', label: 'Word' }, { key: 'reading', label: 'Reading' },
-    { key: 'meaning', label: 'Meaning' }, { key: 'jlpt_level', label: 'JLPT' },
-    { key: 'example_sentence', label: 'Example Sentence' }, { key: 'example_meaning', label: 'Example Meaning' },
-  ],
-  bunpou: [
-    { key: 'title', label: 'Grammar' }, { key: 'reading', label: 'Reading' },
-    { key: 'structure', label: 'Structure' }, { key: 'meaning', label: 'Meaning' },
-    { key: 'jlpt_level', label: 'JLPT' }, { key: 'example_sentence', label: 'Example Sentence' },
-    { key: 'example_meaning', label: 'Example Meaning' }, { key: 'nuance', label: 'Nuance' },
-    { key: 'nuance_usage', label: 'Nuance & Usage' }, { key: 'conjugation_rules', label: 'Conjugation Rules' },
-  ],
-  questions: [
-    { key: 'question_text', label: 'Question' }, { key: 'exam_type', label: 'Exam' },
-    { key: 'section', label: 'Section' }, { key: 'correct_answer', label: 'Answer' },
-  ],
-};
-
-const searchColumns: Record<TableName, string[]> = {
-  kanji: ['kanji', 'onyomi', 'kunyomi', 'meaning', 'example_sentence', 'example_meaning'],
-  kotoba: ['word', 'reading', 'meaning', 'example_sentence', 'example_meaning'],
-  bunpou: ['title', 'reading', 'structure', 'meaning', 'example_sentence', 'example_meaning', 'nuance_usage'],
-  questions: ['question_text', 'exam_type', 'section', 'explanation', 'options'],
-};
-
-const jlptLevels = ['N5', 'N4', 'N3', 'N2', 'N1'];
-
-interface EntityManagementProps {
-  title: string;
-  rows: EntityRow[];
-  kind: TableName;
-  formConfig: EntityFormConfig;
-  onCreate: (event: FormEvent) => Promise<void>;
-  onUpdate: (id: string) => Promise<void>;
-  onEdit: (row: EntityRow) => void;
-  onReset: () => void;
-  onDelete: (id: string) => Promise<void>;
-  onFilterChange?: (filter: string) => void | Promise<void>;
-}
-
-function EntityManagementTab({ title, rows, kind, formConfig, onCreate, onUpdate, onEdit, onReset, onDelete, onFilterChange }: EntityManagementProps) {
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [filterValue, setFilterValue] = useState('ALL');
-  const [sortValue, setSortValue] = useState('created_newest');
-  const [pageSize, setPageSize] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [modalMode, setModalMode] = useState<ModalMode>(null);
-  useBackDismiss(modalMode !== null, () => setModalMode(null));
-  const [selectedRow, setSelectedRow] = useState<EntityRow | null>(null);
-  const [formError, setFormError] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const pageSizeOptions = [10, 20];
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setDebouncedSearch(search.trim().toLocaleLowerCase()), 300);
-    return () => window.clearTimeout(timeout);
-  }, [search]);
-
-  const filteredRows = useMemo(() => {
-    const query = debouncedSearch;
-    const matchingRows = rows.filter((row: EntityRow) => {
-      const values = row as unknown as Record<string, unknown>;
-      const matchesSearch = !query || searchColumns[kind].some((column) =>
-        String(values[column] ?? '').toLocaleLowerCase().includes(query),
-      );
-      const matchesFilter = filterValue === 'ALL' || (
-        kind === 'questions'
-          ? String(values.section ?? '') === filterValue
-          : String(values.jlpt_level ?? '') === filterValue
-      );
-      return matchesSearch && matchesFilter;
-    });
-
-    const primaryColumn = searchColumns[kind][0];
-    return matchingRows.sort((left, right) => {
-      const leftValues = left as unknown as Record<string, unknown>;
-      const rightValues = right as unknown as Record<string, unknown>;
-      if (sortValue === 'alpha_asc' || sortValue === 'alpha_desc') {
-        const order = String(leftValues[primaryColumn] ?? '').localeCompare(String(rightValues[primaryColumn] ?? ''), undefined, { sensitivity: 'base' });
-        return sortValue === 'alpha_asc' ? order : -order;
-      }
-      if (sortValue === 'jlpt') {
-        const rank = (rowValues: Record<string, unknown>) => {
-          const level = String(rowValues.jlpt_level ?? rowValues.exam_type ?? '').slice(-2);
-          const index = jlptLevels.indexOf(level);
-          return index < 0 ? jlptLevels.length : index;
-        };
-        return rank(leftValues) - rank(rightValues);
-      }
-      const leftDate = Date.parse(String(leftValues.created_at ?? '')) || 0;
-      const rightDate = Date.parse(String(rightValues.created_at ?? '')) || 0;
-      return sortValue === 'created_oldest' ? leftDate - rightDate : rightDate - leftDate;
-    });
-  }, [rows, kind, debouncedSearch, filterValue, sortValue]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  const safePage = Math.min(currentPage, totalPages);
-  const firstIndex = (safePage - 1) * pageSize;
-  const pageRows = filteredRows.slice(firstIndex, firstIndex + pageSize);
-  const columns = tableColumns[kind];
-  const filterOptions = kind === 'questions' ? ['goi', 'bunpou', 'dokkai', 'choukai'] : jlptLevels;
-
-  const openAdd = () => {
-    onReset();
-    setSelectedRow(null);
-    setFormError('');
-    setModalMode('add');
-  };
-
-  const openEdit = (row: EntityRow) => {
-    onEdit(row);
-    setSelectedRow(row);
-    setFormError('');
-    setModalMode('edit');
-  };
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsSaving(true);
-    setFormError('');
-    try {
-      if (modalMode === 'edit' && selectedRow) {
-        await onUpdate(String((selectedRow as unknown as Record<string, unknown>).id));
-      } else {
-        await onCreate(event);
-      }
-      setModalMode(null);
-      setSelectedRow(null);
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Unable to save this item.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDelete = async (row: EntityRow) => {
-    const id = String((row as unknown as Record<string, unknown>).id);
-    if (!window.confirm(`Delete this ${title.toLocaleLowerCase()} item? This cannot be undone.`)) return;
-    setFormError('');
-    try {
-      await onDelete(id);
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Unable to delete this item.');
-    }
-  };
-
-  const formatCell = (value: unknown) => Array.isArray(value) ? value.join(', ') : String(value ?? '—');
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3">
-        <label className="min-w-[220px] flex-1">
-          <span className="sr-only">Search {title}</span>
-          <input
-            value={search}
-            onChange={(event) => { setSearch(event.target.value); setCurrentPage(1); }}
-            placeholder={`Search ${title.toLocaleLowerCase()}...`}
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white placeholder:text-slate-500 outline-none focus:border-indigo-400"
-          />
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-400">
-          <span>{kind === 'questions' ? 'Section' : 'JLPT'}</span>
-          <select value={filterValue} onChange={(event) => {
-            const selectedFilter = event.target.value;
-            setFilterValue(selectedFilter);
-            setCurrentPage(1);
-            if (kind === 'kanji') void onFilterChange?.(selectedFilter);
-          }} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
-            <option value="ALL">All</option>
-            {filterOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-400">
-          <span>Sort</span>
-          <select value={sortValue} onChange={(event) => { setSortValue(event.target.value); setCurrentPage(1); }} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
-            <option value="created_newest">Created: Newest</option>
-            <option value="created_oldest">Created: Oldest</option>
-            <option value="alpha_asc">Alphabetical: A-Z</option>
-            <option value="alpha_desc">Alphabetical: Z-A</option>
-            <option value="jlpt">JLPT Level</option>
-          </select>
-        </label>
-        <button type="button" onClick={openAdd} className="rounded-lg bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-400">+ Add New</button>
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm text-slate-200">
-            <thead className="bg-slate-800 text-slate-300">
-              <tr>
-                {columns.map((column) => <th key={column.key} className="whitespace-nowrap px-4 py-3 text-xs uppercase tracking-wide">{column.label}</th>)}
-                <th className="px-4 py-3 text-right text-xs uppercase tracking-wide">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 ? (
-                <tr><td className="px-4 py-10 text-center text-slate-400" colSpan={columns.length + 1}>No records found.</td></tr>
-              ) : pageRows.map((row: EntityRow) => {
-                const values = row as unknown as Record<string, unknown>;
-                const id = String(values.id);
-                return (
-                  <tr key={id} className="border-t border-slate-800">
-                    {columns.map((column) => <td key={column.key} className="max-w-64 whitespace-normal px-4 py-3 align-top">{formatCell(values[column.key])}</td>)}
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => { setSelectedRow(row); setModalMode('view'); }} className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-800">View</button>
-                        <button type="button" onClick={() => openEdit(row)} className="rounded-md border border-indigo-500/50 px-2.5 py-1.5 text-xs text-indigo-200 hover:bg-indigo-500/10">Edit</button>
-                        <button type="button" onClick={() => void handleDelete(row)} className="rounded-md border border-rose-500/40 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-500/10">Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {formError && <div role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{formError}</div>}
-
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
-        <p>Showing {filteredRows.length ? firstIndex + 1 : 0} to {Math.min(firstIndex + pageSize, filteredRows.length)} of {filteredRows.length} items</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2">Rows
-            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-white">
-              {pageSizeOptions.map((size) => <option key={size} value={size}>{size}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded-md border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">Previous</button>
-          {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
-            <button key={page} type="button" onClick={() => setCurrentPage(page)} aria-current={safePage === page ? 'page' : undefined} className={`h-8 min-w-8 rounded-md border px-2 ${safePage === page ? 'border-indigo-400 bg-indigo-500 text-white' : 'border-slate-700 text-slate-200 hover:bg-slate-800'}`}>{page}</button>
-          ))}
-          <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safePage === totalPages} className="rounded-md border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">Next</button>
-        </div>
-      </div>
-
-      {modalMode && (
-        <div className="admin-modal-overlay fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalMode(null); }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="entity-modal-title" className="my-auto max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
-            <div className="mb-5 flex items-center justify-between">
-              <h3 id="entity-modal-title" className="text-lg font-semibold text-white">{modalMode === 'view' ? `View ${title}` : `${modalMode === 'edit' ? 'Edit' : 'Add'} ${title}`}</h3>
-              <button type="button" aria-label="Close dialog" onClick={() => setModalMode(null)} className="rounded-md px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white">✕</button>
-            </div>
-            {modalMode === 'view' && selectedRow ? (
-              <dl className="grid gap-3 sm:grid-cols-2">
-                {Object.entries(selectedRow).map(([key, value]) => (
-                  <div key={key} className="border-b border-slate-800 pb-2">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">{key.replace(/_/g, ' ')}</dt>
-                    <dd className="mt-1 break-words text-sm text-slate-100">{formatCell(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : (
-              <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {formConfig.fields.map((field) => (
-                    <label key={field.name} className="block text-sm text-slate-300">
-                      <span className="mb-1.5 block">{field.label}</span>
-                      {field.options ? (
-                        <select value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white">
-                          {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
-                        </select>
-                      ) : field.type === 'textarea' ? (
-                        <textarea rows={4} value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-indigo-400" />
-                      ) : (
-                        <input type={field.type ?? 'text'} value={String(field.value)} onChange={(event) => field.onChange(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400" />
-                      )}
-                    </label>
-                  ))}
-                </div>
-                {formError && <p role="alert" className="text-sm text-rose-300">{formError}</p>}
-                <div className="flex justify-end gap-2 border-t border-slate-800 pt-4">
-                  <button type="button" onClick={() => setModalMode(null)} className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200">Cancel</button>
-                  <button type="submit" disabled={isSaving} className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isSaving ? 'Saving...' : modalMode === 'edit' ? 'Save Changes' : 'Create Item'}</button>
-                </div>
-              </form>
-            )}
-          </section>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<AdminTab>('Overview');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [selectedJlptLevel, setSelectedJlptLevel] = useState<'n5' | 'n4' | 'n3' | 'n2' | 'n1'>('n5');
 
   const [kanjiRows, setKanjiRows] = useState<KanjiItem[]>([]);
   const [kotobaRows, setKotobaRows] = useState<KotobaItem[]>([]);
@@ -392,16 +78,7 @@ function AdminDashboard() {
   const [questionForm, setQuestionForm] = useState(defaultQuestionForm);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-  const [uploadProgress, setUploadProgress] = useState('');
-
-  const [excelTable, setExcelTable] = useState<TableName>('kanji');
-  const [excelRows, setExcelRows] = useState<Record<string, unknown>[]>([]);
-  const [selectedFileName, setSelectedFileName] = useState('');
-  const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const previewColumns = excelTable === 'questions' ? Object.keys(excelRows[0] ?? {}) : sampleTemplateHeaders[excelTable];
 
   const fetchAllData = async () => {
     try {
@@ -450,7 +127,8 @@ function AdminDashboard() {
 
   const fetchKanjiRows = async (jlptFilter: string) => {
     let query = supabase.from('kanji').select('*');
-    if (jlptFilter !== 'ALL') query = query.eq('jlpt_level', jlptFilter);
+    const selectedLevel = jlptLevels.find((level) => level === jlptFilter);
+    if (selectedLevel) query = query.eq('jlpt_level', selectedLevel);
     const { data, error } = await query.range(0, 4999).order('id', { ascending: false });
     if (error) {
       setErrorMessage(error.message);
@@ -465,15 +143,6 @@ function AdminDashboard() {
     await supabase.auth.signOut();
     navigate('/login', { replace: true });
   };
-
-  const renderOverview = () => (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <SummaryCard label="Kanji" value={String(dashboardCounts.kanji)} accent="indigo" />
-      <SummaryCard label="Kotoba" value={String(dashboardCounts.kotoba)} accent="blue" />
-      <SummaryCard label="Bunpou" value={String(dashboardCounts.bunpou)} accent="purple" />
-      <SummaryCard label="Questions" value={String(dashboardCounts.questions)} accent="emerald" />
-    </div>
-  );
 
   const handleEntityUpdate = async (kind: TableName, id: string) => {
     const payload = kind === 'kanji'
@@ -495,7 +164,7 @@ function AdminDashboard() {
     await fetchAllData();
   };
 
-  const handleEntityEdit = (kind: TableName, row: EntityRow) => {
+  const handleEntityEdit = (kind: TableName, row: AdminEntityRow) => {
     if (kind === 'kanji') {
       const item = row as KanjiItem;
       setKanjiForm({ kanji: item.kanji, onyomi: item.onyomi ?? '', kunyomi: item.kunyomi ?? '', meaning: item.meaning, jlpt_level: item.jlpt_level, stroke_count: item.stroke_count ?? 1, example_sentence: item.example_sentence ?? '', example_meaning: item.example_meaning ?? '' });
@@ -517,28 +186,6 @@ function AdminDashboard() {
     else if (kind === 'bunpou') setBunpouForm(defaultBunpouForm);
     else setQuestionForm(defaultQuestionForm);
   };
-
-  const renderEntityTab = (
-    title: string,
-    rows: EntityRow[],
-    kind: 'kanji' | 'kotoba' | 'bunpou' | 'questions',
-    formConfig: EntityFormConfig,
-    onCreate: (event: FormEvent) => Promise<void>,
-    onDelete: (id: string) => Promise<void>,
-  ) => (
-    <EntityManagementTab
-      title={title}
-      rows={rows}
-      kind={kind}
-      formConfig={formConfig}
-      onCreate={onCreate}
-      onUpdate={(id) => handleEntityUpdate(kind, id)}
-      onEdit={(row) => handleEntityEdit(kind, row)}
-      onReset={() => handleEntityReset(kind)}
-      onDelete={onDelete}
-      onFilterChange={kind === 'kanji' ? fetchKanjiRows : undefined}
-    />
-  );
 
   const handleKanjiCreate = async (event: FormEvent) => {
     event.preventDefault();
@@ -647,470 +294,84 @@ function AdminDashboard() {
     setQuestionRows((current) => current.filter((item) => item.id !== id));
   };
 
-  const handleParseFile = async (file: File) => {
-    if (!file.name.match(/\.(csv|xlsx|xls)$/i)) {
-      setErrorMessage('Please select a CSV or Excel file.');
-      return;
+  const renderMasterDataTab = (
+    kind: 'kanji' | 'kotoba' | 'bunpou',
+    rows: AdminEntityRow[],
+    formValues: AdminFormValues,
+    onFieldChange: (field: string, value: string) => void,
+    onCreate: (event: FormEvent) => Promise<void>,
+    onDelete: (id: string) => Promise<void>,
+  ) => (
+    <MasterDataTab
+      kind={kind}
+      rows={rows}
+      formValues={formValues}
+      onFieldChange={onFieldChange}
+      onCreate={onCreate}
+      onUpdate={(id) => handleEntityUpdate(kind, id)}
+      onEdit={(row) => handleEntityEdit(kind, row)}
+      onReset={() => handleEntityReset(kind)}
+      onDelete={onDelete}
+      onFilterChange={kind === 'kanji' ? fetchKanjiRows : undefined}
+    />
+  );
+
+  const handleQuestionFieldChange = (field: string, value: string) => {
+    if (field.startsWith('option_')) {
+      const optionIndex = Number(field.slice('option_'.length));
+      setQuestionForm((current) => ({
+        ...current,
+        options: current.options.map((option, index) => index === optionIndex ? value : option),
+      }));
+    } else if (field === 'exam_type') {
+      setQuestionForm((current) => ({ ...current, exam_type: value as QuestionExamType }));
+    } else if (field === 'section') {
+      setQuestionForm((current) => ({ ...current, section: value as QuestionSection }));
+    } else if (field === 'correct_answer') {
+      setQuestionForm((current) => ({ ...current, correct_answer: Number(value) }));
+    } else if (field === 'question_text' || field === 'explanation') {
+      setQuestionForm((current) => ({ ...current, [field]: value }));
     }
-
-    try {
-      const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data, { type: 'array' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const parsedRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-      const normalizedRows = parsedRows.map((row: Record<string, unknown>) => normalizeImportedRow(excelTable, row));
-      setExcelRows(normalizedRows);
-      setSelectedFileName(file.name);
-      setMessage('File parsed successfully. Review the data and upload when ready.');
-      setErrorMessage('');
-    } catch (error) {
-      const errMessage = error instanceof Error ? error.message : 'Failed to read the selected file.';
-      setErrorMessage(errMessage);
-    }
-  };
-
-  const handleSyncKanjiApi = async () => {
-    setIsSyncing(true);
-    setErrorMessage('');
-    setMessage('');
-    setUploadProgress('Fetching kanji list...');
-    const levelNum = String(selectedJlptLevel).replace(/[^0-9]/g, '');
-
-    try {
-      const listResponse = await fetch(`https://kanjiapi.dev/v1/kanji/jlpt-${levelNum}`);
-      if (!listResponse.ok) throw new Error(`KanjiAPI request failed (${listResponse.status}).`);
-      const kanjiList: string[] = await listResponse.json();
-      const payloadList: Record<string, unknown>[] = [];
-
-      for (let start = 0; start < kanjiList.length; start += importChunkSize) {
-        const kanjiBatch = kanjiList.slice(start, start + importChunkSize);
-        setUploadProgress(`Fetching kanji details ${start + 1} to ${start + kanjiBatch.length} of ${kanjiList.length}...`);
-        const entriesBatch = await Promise.all(kanjiBatch.map(async (kanji) => {
-          const response = await fetch(`https://kanjiapi.dev/v1/kanji/${encodeURIComponent(kanji)}`);
-          if (!response.ok) throw new Error(`Failed to fetch details for ${kanji} (${response.status}).`);
-          const details = await response.json() as {
-            kanji: string;
-            kun_readings?: string[];
-            meanings?: string[];
-            on_readings?: string[];
-            stroke_count?: number;
-          };
-
-          let exampleSentence = '';
-          let exampleMeaning = '';
-          try {
-            const wordsResponse = await fetch(`https://kanjiapi.dev/v1/words/${encodeURIComponent(kanji)}`);
-            if (wordsResponse.ok) {
-              const words = await wordsResponse.json() as Array<{
-                variants?: Array<{ written?: string; pronounced?: string }>;
-                meanings?: Array<{ glosses?: string[] }>;
-              }>;
-              const firstWord = words[0];
-              const firstVariant = firstWord?.variants?.[0];
-              if (firstVariant?.written && firstVariant.pronounced) {
-                exampleSentence = `${firstVariant.written} (${firstVariant.pronounced})`;
-              }
-              exampleMeaning = firstWord?.meanings?.[0]?.glosses?.join(', ') ?? '';
-            }
-          } catch {
-            // Keep examples empty when the words endpoint is unavailable.
-          }
-
-          return { details, exampleSentence, exampleMeaning };
-        }));
-
-        payloadList.push(...entriesBatch.map(({ details, exampleSentence, exampleMeaning }) => ({
-          kanji: details.kanji,
-          onyomi: (details.on_readings ?? []).join(', '),
-          kunyomi: (details.kun_readings ?? []).join(', '),
-          stroke_count: details.stroke_count ?? 1,
-          jlpt_level: `N${levelNum}`,
-          meaning: (details.meanings ?? []).join(', '),
-          example_sentence: exampleSentence,
-          example_meaning: exampleMeaning,
-        })));
-      }
-
-      const syncedCount = await upsertMasterData('kanji', payloadList, (batchNumber, totalBatches) => {
-        setUploadProgress(`Syncing batch ${batchNumber} of ${totalBatches}...`);
-      });
-      setUploadProgress('Sync complete.');
-      setMessage(`${syncedCount} kanji synced from KanjiAPI.dev.`);
-      void fetchAllData();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to sync kanji from KanjiAPI.dev.');
-      setUploadProgress('');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleExportKanjiToExcel = async () => {
-    setErrorMessage('');
-    setMessage('');
-    setUploadProgress('Fetching kanji list for export...');
-    const levelNum = String(selectedJlptLevel).replace(/[^0-9]/g, '');
-
-    try {
-      const listResponse = await fetch(`https://kanjiapi.dev/v1/kanji/jlpt-${levelNum}`);
-      if (!listResponse.ok) throw new Error(`KanjiAPI request failed (${listResponse.status}).`);
-      const kanjiList: string[] = await listResponse.json();
-      const rows: Record<string, unknown>[] = [];
-
-      for (let start = 0; start < kanjiList.length; start += importChunkSize) {
-        const kanjiBatch = kanjiList.slice(start, start + importChunkSize);
-        setUploadProgress(`Fetching export data ${start + 1} to ${start + kanjiBatch.length} of ${kanjiList.length}...`);
-        const entries = await Promise.all(kanjiBatch.map(async (kanji) => {
-          const response = await fetch(`https://kanjiapi.dev/v1/kanji/${encodeURIComponent(kanji)}`);
-          if (!response.ok) throw new Error(`Failed to fetch details for ${kanji} (${response.status}).`);
-          const details = await response.json() as {
-            kanji: string;
-            kun_readings?: string[];
-            meanings?: string[];
-            on_readings?: string[];
-            stroke_count?: number;
-          };
-
-          let exampleSentence = '';
-          let exampleMeaning = '';
-          try {
-            const wordsResponse = await fetch(`https://kanjiapi.dev/v1/words/${encodeURIComponent(kanji)}`);
-            if (wordsResponse.ok) {
-              const words = await wordsResponse.json() as Array<{
-                variants?: Array<{ written?: string; pronounced?: string }>;
-                meanings?: Array<{ glosses?: string[] }>;
-              }>;
-              const firstWord = words[0];
-              const firstVariant = firstWord?.variants?.[0];
-              if (firstVariant?.written && firstVariant.pronounced) {
-                exampleSentence = `${firstVariant.written} (${firstVariant.pronounced})`;
-              }
-              exampleMeaning = firstWord?.meanings?.[0]?.glosses?.join(', ') ?? '';
-            }
-          } catch {
-            // Keep examples empty when the words endpoint is unavailable.
-          }
-
-          return {
-            kanji: details.kanji,
-            onyomi: (details.on_readings ?? []).join(', '),
-            kunyomi: (details.kun_readings ?? []).join(', '),
-            stroke_count: details.stroke_count ?? 1,
-            jlpt_level: `N${levelNum}`,
-            meaning: (details.meanings ?? []).join(', '),
-            example_sentence: exampleSentence,
-            example_meaning: exampleMeaning,
-          };
-        }));
-        rows.push(...entries);
-      }
-
-      const worksheet = XLSX.utils.json_to_sheet(rows);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Kanji');
-      XLSX.writeFile(workbook, `Kanji_N${levelNum}_KanjiAPI.xlsx`);
-      setUploadProgress('');
-      setMessage(`${rows.length} kanji exported to Excel.`);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to export kanji from KanjiAPI.dev.');
-      setUploadProgress('');
-    }
-  };
-
-  const handleExcelUpload = async () => {
-    if (!excelRows.length) {
-      setErrorMessage('No parsed data to upload.');
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      setUploadProgress('');
-      if (excelTable === 'questions') {
-        const totalBatches = Math.ceil(excelRows.length / importChunkSize);
-        for (let start = 0; start < excelRows.length; start += importChunkSize) {
-          const batchNumber = Math.floor(start / importChunkSize) + 1;
-          setUploadProgress(`Uploading batch ${batchNumber} of ${totalBatches}...`);
-          const payload = excelRows.slice(start, start + importChunkSize);
-          const { error } = await supabase.from('questions').upsert(payload as any[], {
-            onConflict: 'id',
-            ignoreDuplicates: false,
-          });
-          if (error) {
-            console.error(`Error uploading batch starting at index ${start}:`, error);
-            console.error('Supabase error details:', { details: error.details, message: error.message, hint: error.hint });
-            throw error;
-          }
-        }
-        setUploadProgress('Upload complete.');
-        setMessage(`${excelRows.length} rows uploaded to ${tableDisplayLabels[excelTable]}.`);
-      } else {
-        const importedCount = await upsertMasterData(excelTable, excelRows, (batchNumber, totalBatches) => {
-          setUploadProgress(`Uploading batch ${batchNumber} of ${totalBatches}...`);
-        });
-        setUploadProgress('Upload complete.');
-        setMessage(`${importedCount} rows imported or updated in ${tableDisplayLabels[excelTable]}.`);
-      }
-      void fetchAllData();
-    } catch (error) {
-      const errMessage = error instanceof Error ? error.message : 'Upload failed.';
-      setErrorMessage(errMessage);
-      setUploadProgress('');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDownloadTemplate = () => {
-    const headers = sampleTemplateHeaders[excelTable];
-    const worksheet = XLSX.utils.aoa_to_sheet([headers]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-    XLSX.writeFile(workbook, `${excelTable}_template.xlsx`);
   };
 
   const renderTabContent = () => {
     switch (activeTab) {
       case 'Overview':
-        return renderOverview();
-      case 'Kanji':
-        return renderEntityTab(
-          'Kanji',
-          kanjiRows,
-          'kanji',
-          {
-            key: 'kanji-form',
-            label: 'Kanji',
-            fields: [
-              { label: 'Kanji', name: 'kanji', value: kanjiForm.kanji, onChange: (value) => setKanjiForm((current) => ({ ...current, kanji: value })) },
-              { label: 'Onyomi', name: 'onyomi', value: kanjiForm.onyomi, onChange: (value) => setKanjiForm((current) => ({ ...current, onyomi: value })) },
-              { label: 'Kunyomi', name: 'kunyomi', value: kanjiForm.kunyomi, onChange: (value) => setKanjiForm((current) => ({ ...current, kunyomi: value })) },
-              { label: 'Meaning', name: 'meaning', value: kanjiForm.meaning, onChange: (value) => setKanjiForm((current) => ({ ...current, meaning: value })) },
-              { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: kanjiForm.jlpt_level, onChange: (value) => setKanjiForm((current) => ({ ...current, jlpt_level: value })) },
-              { label: 'Stroke Count', name: 'stroke_count', type: 'number', value: kanjiForm.stroke_count, onChange: (value) => setKanjiForm((current) => ({ ...current, stroke_count: Number(value) })) },
-              { label: 'Example Sentence', name: 'example_sentence', value: kanjiForm.example_sentence, onChange: (value) => setKanjiForm((current) => ({ ...current, example_sentence: value })) },
-              { label: 'Example Meaning', name: 'example_meaning', value: kanjiForm.example_meaning, onChange: (value) => setKanjiForm((current) => ({ ...current, example_meaning: value })) },
-            ],
-          },
-          handleKanjiCreate,
-          handleKanjiDelete,
-        );
-      case 'Kotoba':
-        return renderEntityTab(
-          'Kotoba',
-          kotobaRows,
-          'kotoba',
-          {
-            key: 'kotoba-form',
-            label: 'Kotoba',
-            fields: [
-              { label: 'Word', name: 'word', value: kotobaForm.word, onChange: (value) => setKotobaForm((current) => ({ ...current, word: value })) },
-              { label: 'Reading', name: 'reading', value: kotobaForm.reading, onChange: (value) => setKotobaForm((current) => ({ ...current, reading: value })) },
-              { label: 'Meaning', name: 'meaning', value: kotobaForm.meaning, onChange: (value) => setKotobaForm((current) => ({ ...current, meaning: value })) },
-              { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: kotobaForm.jlpt_level, onChange: (value) => setKotobaForm((current) => ({ ...current, jlpt_level: value })) },
-              { label: 'Part of Speech', name: 'part_of_speech', value: kotobaForm.part_of_speech, onChange: (value) => setKotobaForm((current) => ({ ...current, part_of_speech: value })) },
-              { label: 'Example Sentence', name: 'example_sentence', value: kotobaForm.example_sentence, onChange: (value) => setKotobaForm((current) => ({ ...current, example_sentence: value })) },
-              { label: 'Example Meaning', name: 'example_meaning', value: kotobaForm.example_meaning, onChange: (value) => setKotobaForm((current) => ({ ...current, example_meaning: value })) },
-            ],
-          },
-          handleKotobaCreate,
-          handleKotobaDelete,
-        );
-      case 'Bunpou':
-        return renderEntityTab(
-          'Bunpou',
-          bunpouRows,
-          'bunpou',
-          {
-            key: 'bunpou-form',
-            label: 'Bunpou',
-            fields: [
-              { label: 'Title', name: 'title', value: bunpouForm.title, onChange: (value) => setBunpouForm((current) => ({ ...current, title: value })) },
-              { label: 'Reading', name: 'reading', value: bunpouForm.reading, onChange: (value) => setBunpouForm((current) => ({ ...current, reading: value })) },
-              { label: 'Structure', name: 'structure', value: bunpouForm.structure, onChange: (value) => setBunpouForm((current) => ({ ...current, structure: value })) },
-              { label: 'Meaning', name: 'meaning', value: bunpouForm.meaning, onChange: (value) => setBunpouForm((current) => ({ ...current, meaning: value })) },
-              { label: 'JLPT Level', name: 'jlpt_level', options: jlptLevels, value: bunpouForm.jlpt_level, onChange: (value) => setBunpouForm((current) => ({ ...current, jlpt_level: value })) },
-              { label: 'Example Sentence', name: 'example_sentence', value: bunpouForm.example_sentence, onChange: (value) => setBunpouForm((current) => ({ ...current, example_sentence: value })) },
-              { label: 'Example Meaning', name: 'example_meaning', value: bunpouForm.example_meaning, onChange: (value) => setBunpouForm((current) => ({ ...current, example_meaning: value })) },
-              { label: 'Nuance & Usage Notes', name: 'nuance_usage', type: 'textarea', value: bunpouForm.nuance_usage, onChange: (value) => setBunpouForm((current) => ({ ...current, nuance_usage: value })) },
-              { label: 'Conjugation Rules (JSON)', name: 'conjugation_rules', type: 'textarea', value: bunpouForm.conjugation_rules, onChange: (value) => setBunpouForm((current) => ({ ...current, conjugation_rules: value })) },
-            ],
-          },
-          handleBunpouCreate,
-          handleBunpouDelete,
-        );
-      case 'Questions':
-        return renderEntityTab(
-          'Questions',
-          questionRows,
-          'questions',
-          {
-            key: 'question-form',
-            label: 'Question',
-            fields: [
-              { label: 'Exam Type', name: 'exam_type', options: ['JLPT_N5', 'JLPT_N4', 'SSW_KAIGO', 'SSW_FOOD_SERVICE'], value: questionForm.exam_type, onChange: (value) => setQuestionForm((current) => ({ ...current, exam_type: value as QuestionExamType })) },
-              { label: 'Section', name: 'section', options: ['goi', 'bunpou', 'dokkai', 'choukai'], value: questionForm.section, onChange: (value) => setQuestionForm((current) => ({ ...current, section: value as QuestionSection })) },
-              { label: 'Question Text', name: 'question_text', value: questionForm.question_text, onChange: (value) => setQuestionForm((current) => ({ ...current, question_text: value })) },
-              { label: 'Option A', name: 'option_0', value: questionForm.options[0], onChange: (value) => setQuestionForm((current) => ({ ...current, options: [value, current.options[1], current.options[2], current.options[3]] })) },
-              { label: 'Option B', name: 'option_1', value: questionForm.options[1], onChange: (value) => setQuestionForm((current) => ({ ...current, options: [current.options[0], value, current.options[2], current.options[3]] })) },
-              { label: 'Option C', name: 'option_2', value: questionForm.options[2], onChange: (value) => setQuestionForm((current) => ({ ...current, options: [current.options[0], current.options[1], value, current.options[3]] })) },
-              { label: 'Option D', name: 'option_3', value: questionForm.options[3], onChange: (value) => setQuestionForm((current) => ({ ...current, options: [current.options[0], current.options[1], current.options[2], value] })) },
-              { label: 'Correct Answer Index', name: 'correct_answer', type: 'number', value: questionForm.correct_answer, onChange: (value) => setQuestionForm((current) => ({ ...current, correct_answer: Number(value) })) },
-              { label: 'Explanation', name: 'explanation', value: questionForm.explanation, onChange: (value) => setQuestionForm((current) => ({ ...current, explanation: value })) },
-            ],
-          },
-          handleQuestionCreate,
-          handleQuestionDelete,
-        );
-      case 'Excel Import':
         return (
-          <div className="space-y-6">
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <h3 className="mb-4 text-lg font-semibold text-white">Sync Data from KanjiAPI.dev</h3>
-              <div className="flex flex-wrap items-end gap-3">
-                <label className="text-sm text-slate-300">
-                  JLPT level
-                  <select
-                    value={selectedJlptLevel}
-                    onChange={(event) => setSelectedJlptLevel(event.target.value as typeof selectedJlptLevel)}
-                    disabled={isSyncing}
-                    className="mt-1 block rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400 disabled:opacity-50"
-                  >
-                    {(['5', '4', '3', '2', '1'] as const).map((level) => (
-                      <option key={level} value={level}>{level.toUpperCase()}</option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={handleSyncKanjiApi}
-                  disabled={isSyncing}
-                  className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isSyncing ? 'Fetching & Syncing...' : 'Fetch & Sync'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportKanjiToExcel}
-                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm font-medium text-slate-100 hover:border-slate-500"
-                >
-                  Export to Excel
-                </button>
-              </div>
-            </section>
-
-            <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-                <label className="mb-2 block text-sm text-slate-300">Target table</label>
-                <select
-                  value={excelTable}
-                  onChange={(event) => setExcelTable(event.target.value as TableName)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-indigo-400"
-                >
-                  {fileTypeOptions.map((table) => (
-                    <option key={table} value={table}>
-                      {tableDisplayLabels[table]}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={handleDownloadTemplate}
-                  className="mt-4 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm font-medium text-slate-100 hover:border-slate-500"
-                >
-                  Download Template
-                </button>
-              </div>
-
-              <div
-                className={`rounded-2xl border-2 border-dashed p-6 transition ${isDraggingFile ? 'border-indigo-400 bg-indigo-500/5' : 'border-slate-700 bg-slate-900'}`}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setIsDraggingFile(true);
-                }}
-                onDragLeave={() => setIsDraggingFile(false)}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setIsDraggingFile(false);
-                  const file = event.dataTransfer.files?.[0];
-                  if (file) void handleParseFile(file);
-                }}
-              >
-                <input
-                  type="file"
-                  accept='.csv,.xlsx,.xls'
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void handleParseFile(file);
-                  }}
-                  className="hidden"
-                  id="excel-upload-input"
-                />
-                <label htmlFor="excel-upload-input" className="flex cursor-pointer flex-col items-center justify-center gap-3 text-center text-slate-300">
-                  <div className="rounded-full bg-slate-800 px-4 py-2 text-xs uppercase tracking-[0.2em] text-indigo-300">Upload</div>
-                  <div>
-                    <p className="text-lg font-medium text-white">Drop a CSV or Excel file here</p>
-                    <p className="mt-1 text-sm text-slate-400">or click to browse</p>
-                  </div>
-                  {selectedFileName && <span className="text-sm text-emerald-300">Selected: {selectedFileName}</span>}
-                </label>
-              </div>
-            </div>
-
-            {message && (
-              <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</div>
-            )}
-
-            {errorMessage && (
-              <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{errorMessage}</div>
-            )}
-
-            {uploadProgress && (
-              <div className="rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200" role="status">{uploadProgress}</div>
-            )}
-
-            {excelRows.length > 0 && (
-              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-lg font-semibold text-white">Parsed Preview</h3>
-                  <button
-                    type="button"
-                    onClick={handleExcelUpload}
-                    disabled={isSubmitting}
-                    className="rounded-xl bg-emerald-500 px-4 py-2.5 font-medium text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-400/60"
-                  >
-                    {isSubmitting ? 'Uploading...' : 'Confirm & Upload to Supabase'}
-                  </button>
-                </div>
-
-                <div className="overflow-auto">
-                  <table className="min-w-full text-left text-sm text-slate-200">
-                    <thead className="bg-slate-800 text-slate-300">
-                      <tr>
-                        {previewColumns.map((key) => (
-                          <th key={key} className="px-3 py-2 whitespace-nowrap">{key}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelRows.slice(0, 10).map((row: Record<string, unknown>, index) => (
-                        <tr key={`${index}-${Object.values(row).join('-')}`} className="border-t border-slate-800">
-                          {previewColumns.map((key) => {
-                            const value = row[key];
-                            return <td key={`${index}-${key}`} className="px-3 py-2 align-top">
-                              {typeof value === 'string' || typeof value === 'number' ? String(value) : JSON.stringify(value)}
-                            </td>;
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <SummaryCard label="Kanji" value={String(dashboardCounts.kanji)} accent="indigo" />
+            <SummaryCard label="Kotoba" value={String(dashboardCounts.kotoba)} accent="blue" />
+            <SummaryCard label="Bunpou" value={String(dashboardCounts.bunpou)} accent="purple" />
+            <SummaryCard label="Questions" value={String(dashboardCounts.questions)} accent="emerald" />
           </div>
         );
+      case 'Kanji':
+        return renderMasterDataTab('kanji', kanjiRows, kanjiForm, (field, value) => setKanjiForm((current) => ({ ...current, [field]: field === 'stroke_count' ? Number(value) : value })), handleKanjiCreate, handleKanjiDelete);
+      case 'Kotoba':
+        return renderMasterDataTab('kotoba', kotobaRows, kotobaForm, (field, value) => setKotobaForm((current) => ({ ...current, [field]: value })), handleKotobaCreate, handleKotobaDelete);
+      case 'Bunpou':
+        return renderMasterDataTab('bunpou', bunpouRows, bunpouForm, (field, value) => setBunpouForm((current) => ({ ...current, [field]: value })), handleBunpouCreate, handleBunpouDelete);
+      case 'Questions':
+        return (
+          <QuestionsTab
+            rows={questionRows}
+            formValues={{
+              ...questionForm,
+              option_0: questionForm.options[0],
+              option_1: questionForm.options[1],
+              option_2: questionForm.options[2],
+              option_3: questionForm.options[3],
+            }}
+            onFieldChange={handleQuestionFieldChange}
+            onCreate={handleQuestionCreate}
+            onUpdate={(id) => handleEntityUpdate('questions', id)}
+            onEdit={(row) => handleEntityEdit('questions', row)}
+            onReset={() => handleEntityReset('questions')}
+            onDelete={handleQuestionDelete}
+          />
+        );
+      case 'Excel Import':
+        return <ExcelImportTab onRefresh={() => void fetchAllData()} />;
       default:
         return null;
     }
@@ -1157,6 +418,7 @@ function AdminDashboard() {
 
           </header>
 
+          {errorMessage && <div role="alert" className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{errorMessage}</div>}
           {isLoading ? (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-400">Loading dashboard data...</div>
           ) : (
@@ -1182,34 +444,6 @@ function SummaryCard({ label, value, accent }: { label: string; value: string; a
       <h3 className="mt-3 text-3xl font-bold">{value}</h3>
     </div>
   );
-}
-
-function normalizeImportedRow(table: TableName, row: Record<string, unknown>) {
-  if (table !== 'questions') return normalizeMasterImportRow(table as MasterDataTable, row);
-
-  switch (table) {
-    case 'questions': {
-      const options = [
-        row.option_a,
-        row.option_b,
-        row.option_c,
-        row.option_d,
-      ]
-        .map((value) => String(value ?? '').trim())
-        .filter(Boolean);
-
-      return {
-        exam_type: String(row.exam_type ?? 'JLPT_N5'),
-        section: String(row.section ?? 'goi'),
-        question_text: String(row.question_text ?? ''),
-        options,
-        correct_answer: Number(row.correct_answer ?? 0),
-        explanation: String(row.explanation ?? ''),
-      };
-    }
-    default:
-      return row;
-  }
 }
 
 export { AdminDashboard };

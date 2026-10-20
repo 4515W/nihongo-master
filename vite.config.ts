@@ -7,4 +7,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      '/bunpro-api': {
+        target: 'https://api.bunpro.jp',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/bunpro-api/, ''),
+      },
+    },
+  },
 })
